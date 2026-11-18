@@ -31,13 +31,16 @@
       "expo-font",
       [
         "@react-native-google-signin/google-signin",
-        {}
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.placeholder"
+        }
       ]
     ],
     "extra": {
       "eas": {
-        "projectId": "tilawat-masjid-free"
+        "projectId": "0d7b17a4-b5fb-4b83-aff8-b88c27736622"
       }
-    }
+    },
+    "owner": "tilawatalmasjidalkabeer"
   }
 }
