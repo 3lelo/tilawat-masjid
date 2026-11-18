@@ -1,0 +1,14 @@
+name = "tilawat-keep-alive"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Run every 6 hours to prevent Supabase free tier from pausing
+[triggers]
+crons = ["0 */6 * * *"]
+
+[vars]
+SUPABASE_URL = "https://your-project-id.supabase.co"
+
+# SUPABASE_ANON_KEY should be set via:
+# wrangler secret put SUPABASE_ANON_KEY
+# or in the Cloudflare Dashboard under Settings -> Variables -> Environment Variables
