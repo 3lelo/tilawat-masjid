@@ -1,0 +1,154 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&display=swap');
+
+:root {
+  --font-cairo: 'Cairo', system-ui, -apple-system, sans-serif;
+  --bg-color: #F6F8F3;
+  --surface-color: #FFFFFF;
+  --surface-secondary: #EEF3EA;
+  --primary-color: #1B5E20;
+  --primary-hover: #134417;
+  --accent-color: #00897B;
+  --text-main: #17271D;
+  --text-muted: #586E61;
+  --border-color: #D8E2D4;
+  --border-light: #E8EFE5;
+  --danger-color: #D32F2F;
+  --danger-bg: #FFEBEE;
+  --warning-color: #F57C00;
+  --warning-bg: #FFF3E0;
+  --success-color: #2E7D32;
+  --success-bg: #E8F5E9;
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-cairo);
+  background-color: var(--bg-color);
+  color: var(--text-main);
+  direction: rtl;
+  text-align: right;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Islamic Geometric Background pattern */
+.bg-pattern {
+  background-image: radial-gradient(var(--border-color) 0.75px, transparent 0.75px), radial-gradient(var(--border-color) 0.75px, var(--bg-color) 0.75px);
+  background-size: 30px 30px;
+  background-position: 0 0, 15px 15px;
+}
+
+/* Card components */
+.card {
+  background: var(--surface-color);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-radius: var(--radius-md);
+  font-family: var(--font-cairo);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+  min-height: 48px; /* Large touch target for mobile phones */
+}
+
+.btn-primary {
+  background-color: var(--primary-color);
+  color: #FFFFFF;
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-hover);
+}
+
+.btn-secondary {
+  background-color: var(--surface-secondary);
+  color: var(--text-main);
+}
+
+.btn-secondary:hover {
+  background-color: var(--border-color);
+}
+
+.btn-danger {
+  background-color: var(--danger-bg);
+  color: var(--danger-color);
+}
+
+.btn-danger:hover {
+  background-color: #FFCDD2;
+}
+
+/* Form inputs */
+.input, .select, .textarea {
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-family: var(--font-cairo);
+  font-size: 15px;
+  color: var(--text-main);
+  background: #FFFFFF;
+  min-height: 48px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.input:focus, .select:focus, .textarea:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(27, 94, 32, 0.1);
+}
+
+.label {
+  display: block;
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 6px;
+  color: var(--text-main);
+}
+
+/* Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-ready {
+  background: var(--success-bg);
+  color: var(--success-color);
+}
+
+.badge-processing {
+  background: var(--warning-bg);
+  color: var(--warning-color);
+}
+
+.badge-failed {
+  background: var(--danger-bg);
+  color: var(--danger-color);
+}
