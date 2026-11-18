@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "تلاوات المسجد الكبير",
+    "slug": "tilawat-masjid",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F6F8F3"
+    },
+    "android": {
+      "package": "com.tilawat.masjid",
+      "adaptiveIcon": {
+        "backgroundColor": "#1B5E20",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "WAKE_LOCK",
+        "INTERNET"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "@react-native-google-signin/google-signin",
+        {}
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "tilawat-masjid-free"
+      }
+    }
+  }
+}
