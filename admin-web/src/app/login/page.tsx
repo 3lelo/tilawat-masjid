@@ -29,14 +29,26 @@ export default function LoginPage() {
       .from('profiles')
       .select('role')
       .eq('id', userId)
-      .single();
+      .maybeSingle();
 
-    if (error || !profile || profile.role !== 'admin') {
-      setErrorMsg('ليس لديك صلاحية للوصول إلى لوحة الإدارة. الحساب الحالي ليس مسؤولاً.');
-      await supabase.auth.signOut();
-    } else {
-      router.push('/');
+    if (error) {
+      setErrorMsg(`DB Error: ${error.message} (${error.code})`);
+      return;
     }
+
+    if (!profile) {
+      setErrorMsg(`No profile row found in public.profiles for user ID: ${userId}`);
+      await supabase.auth.signOut();
+      return;
+    }
+
+    if (profile.role !== 'admin') {
+      setErrorMsg(`Role is "${profile.role}", expected "admin".`);
+      await supabase.auth.signOut();
+      return;
+    }
+
+    router.push('/');
   };
 
   const handleGoogleLogin = async () => {
