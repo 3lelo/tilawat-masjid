@@ -9,8 +9,8 @@ import {
   UploadCloud,
   Film,
   FolderOpen,
+  Folder as FolderIcon,
   Trash2,
-  Edit,
   Clock,
   CheckCircle,
   AlertTriangle,
@@ -18,20 +18,24 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronLeft,
-  Calendar,
-  Play,
   FileAudio,
   Plus,
+  RotateCw,
+  Loader2,
+  Calendar,
+  Layers,
 } from 'lucide-react';
 
 export default function AdminDashboard() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<'audio' | 'folders' | 'reels'>('audio');
   const [userEmail, setUserEmail] = useState<string>('مدير المسجد');
-  const [loading, setLoading] = useState<boolean>(true);
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [dataLoading, setDataLoading] = useState<boolean>(true);
 
   // Folders state
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState<string>('');
   const [newFolderType, setNewFolderType] = useState<'normal' | 'year_month'>('normal');
@@ -48,6 +52,7 @@ export default function AdminDashboard() {
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [retryingPipelineId, setRetryingPipelineId] = useState<string | null>(null);
 
   // Reels state
   const [reels, setReels] = useState<Reel[]>([]);
@@ -58,18 +63,50 @@ export default function AdminDashboard() {
 
   // Auth and data initialization
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session?.user && !isDemoMode) {
-        router.push('/login');
-        return;
-      }
-      if (session?.user?.email) {
-        setUserEmail(session.user.email);
-      }
-      loadData();
-    });
+    let isMounted = true;
 
-    // Real-time listener for audio file status updates (processing -> ready)
+    async function checkAuthAndInit() {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+
+        if (!session?.user && !isDemoMode) {
+          router.replace('/login');
+          return;
+        }
+
+        if (session?.user && !isDemoMode) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', session.user.id)
+            .maybeSingle();
+
+          if (profile?.role !== 'admin') {
+            await supabase.auth.signOut();
+            router.replace('/login');
+            return;
+          }
+        }
+
+        if (!isMounted) return;
+
+        if (session?.user?.email) {
+          setUserEmail(session.user.email);
+        }
+
+        setIsAuthChecking(false);
+        await loadData();
+      } catch (err) {
+        console.error('Auth verification error:', err);
+        if (isMounted) {
+          router.replace('/login');
+        }
+      }
+    }
+
+    checkAuthAndInit();
+
+    // Real-time listener for audio file status updates (processing -> ready / failed)
     const channel = supabase
       .channel('audio_files_status')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'audio_files' }, () => {
@@ -78,14 +115,15 @@ export default function AdminDashboard() {
       .subscribe();
 
     return () => {
+      isMounted = false;
       supabase.removeChannel(channel);
     };
   }, []);
 
   const loadData = async () => {
-    setLoading(true);
+    setDataLoading(true);
     await Promise.all([loadFolders(), loadAudioFiles(), loadReels()]);
-    setLoading(false);
+    setDataLoading(false);
   };
 
   const loadFolders = async () => {
@@ -98,6 +136,8 @@ export default function AdminDashboard() {
 
       if (!error && data) {
         setFolders(data as Folder[]);
+        // Auto-expand all parent folders by default so user sees the hierarchy
+        setExpandedFolderIds(new Set(data.map((f: Folder) => f.id)));
         if (!uploadFolderId && data.length > 0) {
           setUploadFolderId(data[0].id);
         }
@@ -141,10 +181,46 @@ export default function AdminDashboard() {
   // Sign out
   const handleSignOut = async () => {
     await supabase.auth.signOut();
-    router.push('/login');
+    router.replace('/login');
   };
 
-  // 1. Folder Management Actions
+  // 1. Folder Tree Hierarchy Helpers
+  const toggleFolderExpand = (folderId: string) => {
+    setExpandedFolderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) {
+        next.delete(folderId);
+      } else {
+        next.add(folderId);
+      }
+      return next;
+    });
+  };
+
+  const getSubfolders = (parentId: string | null): Folder[] => {
+    return folders.filter((f) => {
+      if (parentId === null) {
+        return !f.parent_id;
+      }
+      return f.parent_id === parentId;
+    });
+  };
+
+  // Build folder select options with indented hierarchy
+  const getIndentedFolderOptions = (): { folder: Folder; depth: number }[] => {
+    const result: { folder: Folder; depth: number }[] = [];
+    const traverse = (parentId: string | null, depth: number) => {
+      const children = getSubfolders(parentId);
+      for (const child of children) {
+        result.push({ folder: child, depth });
+        traverse(child.id, depth + 1);
+      }
+    };
+    traverse(null, 0);
+    return result;
+  };
+
+  // 2. Folder Actions
   const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFolderName.trim()) return;
@@ -193,16 +269,51 @@ export default function AdminDashboard() {
     }
   };
 
-  // 2. Audio File Direct Upload to R2 and Pipeline Trigger
+  // 3. Audio File Direct Upload to R2 and Pipeline Trigger
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const f = e.target.files[0];
       setSelectedFile(f);
       if (!uploadTitle) {
-        // Auto-fill title from filename without extension
         const nameWithoutExt = f.name.replace(/\.[^/.]+$/, '');
         setUploadTitle(nameWithoutExt);
       }
+    }
+  };
+
+  const triggerConversionPipeline = async (fileId: string, token: string) => {
+    const pipelineRes = await fetch('/api/upload/trigger-pipeline', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ fileId }),
+    });
+
+    const pipelineData = await pipelineRes.json();
+    return { ok: pipelineRes.ok, data: pipelineData };
+  };
+
+  const handleManualRetryPipeline = async (audio: AudioFile) => {
+    setRetryingPipelineId(audio.id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token || '';
+
+      const { ok, data } = await triggerConversionPipeline(audio.id, token);
+      if (ok && data.success) {
+        alert('تم إرسال أمر معالجة الملف الصوتي إلى خادم المعالجة بنجاح.');
+      } else if (data.warning) {
+        alert(`تنبيه: ${data.warning}`);
+      } else {
+        alert(`خطأ: ${data.error || 'تعذر بدء المعالجة'}`);
+      }
+      await loadAudioFiles();
+    } catch (err: any) {
+      alert(`خطأ في إطلاق المعالجة: ${err.message}`);
+    } finally {
+      setRetryingPipelineId(null);
     }
   };
 
@@ -225,10 +336,9 @@ export default function AdminDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token || '';
 
-      // Generate a new UUID for the audio_files record
       const fileId = crypto.randomUUID();
 
-      // 1. Get presigned upload URL from Vercel API
+      // 1. Get presigned upload URL
       const presignRes = await fetch('/api/upload/presign', {
         method: 'POST',
         headers: {
@@ -298,17 +408,16 @@ export default function AdminDashboard() {
       setUploadProgress(98);
       setUploadMessage('جاري إطلاق سير عمل التحويل التلقائي (FFmpeg)...');
 
-      await fetch('/api/upload/trigger-pipeline', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ fileId }),
-      });
+      const { ok, data } = await triggerConversionPipeline(fileId, token);
 
       setUploadProgress(100);
-      setUploadMessage('تم الرفع بنجاح! الملف قيد المعالجة السحابية الآن وسيكون جاهزاً تلقائياً.');
+      if (ok && data.success) {
+        setUploadMessage('تم الرفع وإطلاق المعالجة بنجاح! سيتحول الملف إلى "جاهز" فور اكتمال الضغط.');
+      } else if (data?.warning) {
+        setUploadMessage('تم رفع الملف بنجاح! تنبيه: يلزم إكمال المعالجة بعد ضبط بيانات GitHub Actions في بيئة النشر.');
+      } else {
+        setUploadMessage('تم الرفع، وحدث خطأ أثناء إطلاق المعالجة التلقائية: ' + (data?.error || ''));
+      }
 
       // Reset form
       setSelectedFile(null);
@@ -326,7 +435,12 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteAudio = async (audio: AudioFile) => {
-    if (!window.confirm(`هل أنت متأكد من حذف تسجيل "${audio.title}"؟ سيتم حذف الملف أيضاً من Cloudflare R2.`)) return;
+    const isProcessing = audio.status === 'processing';
+    const warningText = isProcessing
+      ? `التسجيل "${audio.title}" لا يزال قيد المعالجة. هل أنت متأكد من حذفه؟ سيتم حذف بياناته وإلغاء وتنظيف الملفات المرفوعة بالكامل من التخزين السحابي Cloudflare R2.`
+      : `هل أنت متأكد من حذف تسجيل "${audio.title}"؟ سيتم حذف الملف نهائياً من قاعدة البيانات ومن Cloudflare R2.`;
+
+    if (!window.confirm(warningText)) return;
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -350,7 +464,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // 3. Reels Management
+  // 4. Reels Management
   const detectPlatform = (url: string): 'youtube' | 'instagram' | 'facebook' | 'tiktok' => {
     const lower = url.toLowerCase();
     if (lower.includes('youtube.com') || lower.includes('youtu.be')) return 'youtube';
@@ -394,31 +508,186 @@ export default function AdminDashboard() {
     }
   };
 
-  return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* Top Navbar */}
-      <header style={{
-        background: 'var(--surface-color)',
-        borderBottom: '1px solid var(--border-light)',
-        padding: '14px 20px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{
-            width: '40px',
-            height: '40px',
-            borderRadius: '20px',
-            background: 'var(--surface-secondary)',
+  // Recursive Tree Node Renderer
+  const renderFolderTreeNode = (folder: Folder, depth: number = 0) => {
+    const children = getSubfolders(folder.id);
+    const hasChildren = children.length > 0;
+    const isExpanded = expandedFolderIds.has(folder.id);
+    const filesCount = audioFiles.filter((a) => a.folder_id === folder.id).length;
+
+    return (
+      <div key={folder.id} style={{ display: 'flex', flexDirection: 'column' }}>
+        <div
+          style={{
+            padding: '10px 14px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-light)',
+            background: depth === 0 ? 'var(--surface-color)' : 'var(--surface-secondary)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginRight: `${depth * 24}px`,
+            transition: 'background-color 0.15s ease',
+            position: 'relative',
+          }}
+        >
+          {/* Hierarchy Guide Line */}
+          {depth > 0 && (
+            <div
+              style={{
+                position: 'absolute',
+                right: '-16px',
+                top: '50%',
+                width: '14px',
+                height: '1px',
+                backgroundColor: 'var(--border-color)',
+              }}
+            />
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1, minWidth: 0 }}>
+            {hasChildren ? (
+              <button
+                type="button"
+                onClick={() => toggleFolderExpand(folder.id)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '2px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  color: 'var(--primary-color)',
+                }}
+                title={isExpanded ? 'طي المجلد' : 'توسيع المجلد'}
+              >
+                {isExpanded ? <ChevronDown size={18} /> : <ChevronLeft size={18} />}
+              </button>
+            ) : (
+              <span style={{ width: '18px', display: 'inline-block' }} />
+            )}
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--primary-color)', display: 'flex', alignItems: 'center' }}>
+                {isExpanded ? <FolderOpen size={18} /> : <FolderIcon size={18} />}
+              </span>
+              <span style={{ fontWeight: 700, fontSize: '14px' }}>{folder.name}</span>
+              {folder.type === 'year_month' && (
+                <span className="badge badge-processing" style={{ fontSize: '11px', padding: '2px 8px' }}>
+                  سنة مرتبة بالأشهر
+                </span>
+              )}
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                ({filesCount} تلاوة)
+              </span>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              onClick={() => handleDeleteFolder(folder)}
+              className="btn btn-danger"
+              style={{ minHeight: '32px', padding: '4px 8px' }}
+              title="حذف المجلد"
+            >
+              <Trash2 size={15} />
+            </button>
+          </div>
+        </div>
+
+        {/* Render nested children if expanded */}
+        {hasChildren && isExpanded && (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+              marginTop: '6px',
+              borderRight: '2px dashed var(--border-color)',
+              marginRight: `${depth * 24 + 10}px`,
+              paddingRight: '6px',
+            }}
+          >
+            {children.map((child) => renderFolderTreeNode(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Prevent ANY dashboard content from rendering until authentication is fully verified
+  if (isAuthChecking) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: 'var(--bg-color)',
+          gap: '16px',
+        }}
+      >
+        <div
+          style={{
+            width: '56px',
+            height: '56px',
+            borderRadius: '28px',
+            backgroundColor: 'var(--surface-secondary)',
             color: 'var(--primary-color)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-          }}>
+          }}
+        >
+          <FileAudio size={28} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <Loader2 size={24} className="spinner" color="var(--primary-color)" />
+          <h2 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)' }}>
+            جاري التحقق من صلاحيات المشرف...
+          </h2>
+        </div>
+        <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+          لوحة تحكم تلاوات المسجد الكبير
+        </p>
+      </div>
+    );
+  }
+
+  const rootFolders = getSubfolders(null);
+  const folderOptions = getIndentedFolderOptions();
+
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+      {/* Top Navbar */}
+      <header
+        style={{
+          background: 'var(--surface-color)',
+          borderBottom: '1px solid var(--border-light)',
+          padding: '14px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          position: 'sticky',
+          top: 0,
+          zIndex: 100,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div
+            style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '20px',
+              background: 'var(--surface-secondary)',
+              color: 'var(--primary-color)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
             <FileAudio size={22} />
           </div>
           <div>
@@ -434,14 +703,16 @@ export default function AdminDashboard() {
       </header>
 
       {/* Navigation Tabs */}
-      <div style={{
-        background: 'var(--surface-color)',
-        borderBottom: '1px solid var(--border-color)',
-        padding: '0 20px',
-        display: 'flex',
-        gap: '8px',
-        overflowX: 'auto',
-      }}>
+      <div
+        style={{
+          background: 'var(--surface-color)',
+          borderBottom: '1px solid var(--border-color)',
+          padding: '0 20px',
+          display: 'flex',
+          gap: '8px',
+          overflowX: 'auto',
+        }}
+      >
         <button
           onClick={() => setActiveTab('audio')}
           style={{
@@ -518,47 +789,50 @@ export default function AdminDashboard() {
             <div className="card">
               <h2 style={{ fontSize: '17px', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <UploadCloud size={20} color="var(--primary-color)" />
-                <span>رفع تسجيل صوتي أو مرئي جديد</span>
+                <span>رفع تسجيل جديد (صوت أو فيديو)</span>
               </h2>
-
-              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '18px', lineHeight: '20px' }}>
-                الملفات المرفوعة (حتى ساعتين من الصوت أو الفيديو) تُحوّل تلقائياً في السحاب إلى صيغة صوتية خفيفة عالية النقاوة (48kbps AAC) بدون أي تدخل يدوي.
-              </p>
 
               <form onSubmit={handleUploadSubmit}>
                 <div style={{ marginBottom: '14px' }}>
-                  <label className="label">اختر الملف (صوت MP3/WAV/M4A أو فيديو MP4) *</label>
+                  <label className="label">اختر الملف (MP3, M4A, WAV أو MP4 حتى ساعتين) *</label>
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="audio/*,video/*"
+                    accept="audio/*,video/mp4,video/quicktime,video/*"
                     onChange={handleFileSelect}
                     className="input"
-                    style={{ padding: '8px' }}
+                    disabled={isUploading}
                     required
                   />
+                  {selectedFile && (
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      الحجم: {(selectedFile.size / (1024 * 1024)).toFixed(2)} ميجابايت | النوع: {selectedFile.type || 'ملف وسائط'}
+                    </p>
+                  )}
                 </div>
 
                 <div style={{ marginBottom: '14px' }}>
-                  <label className="label">عنوان التسجيل (السورة أو الموضوع) *</label>
+                  <label className="label">عنوان التسجيل أو التلاوة *</label>
                   <input
                     type="text"
                     value={uploadTitle}
                     onChange={(e) => setUploadTitle(e.target.value)}
-                    placeholder="مثال: سورة مريم كاملة - تلاوة خاشعة"
+                    placeholder="مثال: سورة البقرة والرحمن"
                     className="input"
+                    disabled={isUploading}
                     required
                   />
                 </div>
 
                 <div style={{ marginBottom: '14px' }}>
-                  <label className="label">اسم الشيخ أو القارئ *</label>
+                  <label className="label">الشيخ / القارئ *</label>
                   <input
                     type="text"
                     value={uploadSpeaker}
                     onChange={(e) => setUploadSpeaker(e.target.value)}
-                    placeholder="مثال: الشيخ عبد الله بن محمد"
+                    placeholder="مثال: الشيخ إبراهيم الحربي"
                     className="input"
+                    disabled={isUploading}
                     required
                   />
                 </div>
@@ -569,83 +843,108 @@ export default function AdminDashboard() {
                     value={uploadFolderId}
                     onChange={(e) => setUploadFolderId(e.target.value)}
                     className="select"
+                    disabled={isUploading}
                     required
                   >
-                    {folders.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name} {f.type === 'year_month' ? '(سنة مرتبة بالأشهر)' : ''}
+                    <option value="">-- اختر المجلد --</option>
+                    {folderOptions.map(({ folder, depth }) => (
+                      <option key={folder.id} value={folder.id}>
+                        {'\u00A0'.repeat(depth * 4)}{depth > 0 ? '↳ ' : ''}{folder.name}
                       </option>
                     ))}
                   </select>
                 </div>
 
                 <div style={{ marginBottom: '14px' }}>
-                  <label className="label">تاريخ التسجيل *</label>
+                  <label className="label">تاريخ التسجيل</label>
                   <input
                     type="date"
                     value={uploadRecordedAt}
                     onChange={(e) => setUploadRecordedAt(e.target.value)}
                     className="input"
-                    required
+                    disabled={isUploading}
                   />
                 </div>
 
-                <div style={{ marginBottom: '18px' }}>
+                <div style={{ marginBottom: '20px' }}>
                   <label className="label">وصف إضافي (اختياري)</label>
                   <textarea
                     value={uploadDescription}
                     onChange={(e) => setUploadDescription(e.target.value)}
-                    placeholder="ملاحظات حول صلاة الفجر، جودة التسجيل، إلخ..."
+                    placeholder="ملاحظات حول الصلاة أو التلاوة..."
                     className="textarea"
-                    rows={2}
+                    rows={3}
+                    disabled={isUploading}
                   />
                 </div>
 
-                {/* Upload Progress Bar */}
                 {isUploading && (
                   <div style={{ marginBottom: '16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
-                      <span>{uploadMessage}</span>
-                      <span style={{ fontWeight: 700 }}>{uploadProgress}%</span>
+                      <span style={{ fontWeight: 600 }}>{uploadMessage}</span>
+                      <span>{uploadProgress}%</span>
                     </div>
-                    <div style={{ height: '8px', background: 'var(--border-color)', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ width: `${uploadProgress}%`, height: '100%', background: 'var(--primary-color)', transition: 'width 0.3s' }} />
+                    <div style={{ width: '100%', height: '8px', background: 'var(--surface-secondary)', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          width: `${uploadProgress}%`,
+                          height: '100%',
+                          background: 'var(--primary-color)',
+                          transition: 'width 0.3s ease',
+                        }}
+                      />
                     </div>
                   </div>
                 )}
 
                 <button
                   type="submit"
-                  disabled={isUploading}
                   className="btn btn-primary"
                   style={{ width: '100%' }}
+                  disabled={isUploading || folders.length === 0}
                 >
-                  <UploadCloud size={18} />
-                  <span>{isUploading ? 'جاري الرفع والمعالجة...' : 'بدء الرفع المباشر'}</span>
+                  {isUploading ? (
+                    <>
+                      <Loader2 size={18} className="spinner" />
+                      <span>جاري الرفع والمعالجة...</span>
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud size={18} />
+                      <span>بدء الرفع المباشر</span>
+                    </>
+                  )}
                 </button>
               </form>
             </div>
 
             {/* Audio Files List */}
             <div className="card">
-              <h2 style={{ fontSize: '17px', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                <h2 style={{ fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <FileAudio size={20} color="var(--primary-color)" />
-                  <span>التسجيلات المرفوعة ({audioFiles.length})</span>
-                </span>
-                <button onClick={loadAudioFiles} className="btn btn-secondary" style={{ minHeight: '36px', padding: '4px 10px', fontSize: '12px' }}>
-                  تحديث
+                  <span>التسجيلات المحفوظة ({audioFiles.length})</span>
+                </h2>
+                <button
+                  onClick={loadAudioFiles}
+                  className="btn btn-secondary"
+                  style={{ minHeight: '34px', padding: '4px 10px', fontSize: '12px' }}
+                >
+                  <RotateCw size={14} />
+                  <span>تحديث</span>
                 </button>
-              </h2>
+              </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '650px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {audioFiles.map((audio) => {
                   const folder = folders.find((f) => f.id === audio.folder_id);
+                  const isRetrying = retryingPipelineId === audio.id;
+
                   return (
                     <div
                       key={audio.id}
                       style={{
-                        padding: '14px',
+                        padding: '12px 16px',
                         borderRadius: 'var(--radius-md)',
                         border: '1px solid var(--border-light)',
                         background: 'var(--surface-color)',
@@ -653,10 +952,11 @@ export default function AdminDashboard() {
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         gap: '12px',
+                        flexWrap: 'wrap',
                       }}
                     >
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                      <div style={{ flex: 1, minWidth: '220px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 700, fontSize: '15px' }}>{audio.title}</span>
                           {audio.status === 'ready' && <span className="badge badge-ready"><CheckCircle size={12} /> جاهز</span>}
                           {audio.status === 'processing' && <span className="badge badge-processing"><Clock size={12} /> قيد المعالجة</span>}
@@ -670,6 +970,12 @@ export default function AdminDashboard() {
                           {audio.duration_seconds > 0 && <span>المدة: {Math.floor(audio.duration_seconds / 60)} دقيقة</span>}
                         </div>
 
+                        {audio.status === 'processing' && (
+                          <p style={{ fontSize: '11px', color: 'var(--warning-color)', marginTop: '4px' }}>
+                            يتم تحويل الملف وضغطه سحابياً بواسطة FFmpeg...
+                          </p>
+                        )}
+
                         {audio.error_message && (
                           <p style={{ fontSize: '12px', color: 'var(--danger-color)', marginTop: '4px' }}>
                             خطأ المعالجة: {audio.error_message}
@@ -678,7 +984,20 @@ export default function AdminDashboard() {
                       </div>
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {audio.audio_url && (
+                        {(audio.status === 'processing' || audio.status === 'failed') && (
+                          <button
+                            onClick={() => handleManualRetryPipeline(audio)}
+                            disabled={isRetrying}
+                            className="btn btn-secondary"
+                            style={{ minHeight: '36px', padding: '6px 10px', fontSize: '12px' }}
+                            title="إعادة إطلاق المعالجة السحابية"
+                          >
+                            <RotateCw size={14} className={isRetrying ? 'spinner' : ''} />
+                            <span>{isRetrying ? 'جاري الإطلاق...' : 'معالجة'}</span>
+                          </button>
+                        )}
+
+                        {audio.audio_url && audio.status === 'ready' && (
                           <a
                             href={audio.audio_url}
                             target="_blank"
@@ -745,9 +1064,9 @@ export default function AdminDashboard() {
                     className="select"
                   >
                     <option value="">مجلد رئيسي (Root Folder)</option>
-                    {folders.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name}
+                    {folderOptions.map(({ folder, depth }) => (
+                      <option key={folder.id} value={folder.id}>
+                        {'\u00A0'.repeat(depth * 4)}{depth > 0 ? '↳ ' : ''}{folder.name}
                       </option>
                     ))}
                   </select>
@@ -777,62 +1096,36 @@ export default function AdminDashboard() {
 
             {/* Folders Tree View */}
             <div className="card">
-              <h2 style={{ fontSize: '17px', fontWeight: 700, marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <FolderOpen size={20} color="var(--primary-color)" />
-                <span>شجرة المجلدات الحالية ({folders.length})</span>
-              </h2>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                <h2 style={{ fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <FolderOpen size={20} color="var(--primary-color)" />
+                  <span>شجرة المجلدات الهرمية ({folders.length})</span>
+                </h2>
+                {folders.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (expandedFolderIds.size === folders.length) {
+                        setExpandedFolderIds(new Set());
+                      } else {
+                        setExpandedFolderIds(new Set(folders.map((f) => f.id)));
+                      }
+                    }}
+                    className="btn btn-secondary"
+                    style={{ minHeight: '32px', padding: '4px 10px', fontSize: '12px' }}
+                  >
+                    <Layers size={14} />
+                    <span>{expandedFolderIds.size === folders.length ? 'طي الكل' : 'توسيع الكل'}</span>
+                  </button>
+                )}
+              </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {folders.map((folder) => {
-                  const parent = folders.find((f) => f.id === folder.parent_id);
-                  const filesCount = audioFiles.filter((a) => a.folder_id === folder.id).length;
-
-                  return (
-                    <div
-                      key={folder.id}
-                      style={{
-                        padding: '12px 16px',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px solid var(--border-light)',
-                        background: 'var(--surface-color)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        marginRight: folder.parent_id ? '20px' : '0',
-                      }}
-                    >
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ fontWeight: 700 }}>{folder.name}</span>
-                          {folder.type === 'year_month' && (
-                            <span className="badge badge-processing">سنة مرتبة بالأشهر</span>
-                          )}
-                          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                            ({filesCount} تلاوة)
-                          </span>
-                        </div>
-                        {parent && (
-                          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                            تابع لـ: {parent.name}
-                          </p>
-                        )}
-                      </div>
-
-                      <button
-                        onClick={() => handleDeleteFolder(folder)}
-                        className="btn btn-danger"
-                        style={{ minHeight: '34px', padding: '4px 8px' }}
-                        title="حذف المجلد"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  );
-                })}
+                {rootFolders.map((rootFolder) => renderFolderTreeNode(rootFolder, 0))}
 
                 {folders.length === 0 && (
                   <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '30px 0' }}>
-                    لا توجد مجلدات حالياً.
+                    لا توجد مجلدات حالياً. يمكنك إنشاء مجلد جديد من النموذج المقابل.
                   </p>
                 )}
               </div>
