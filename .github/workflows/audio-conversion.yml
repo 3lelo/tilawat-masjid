@@ -19,7 +19,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install ffmpeg
         run: |
@@ -28,7 +28,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          npm install --no-save @aws-sdk/client-s3 @supabase/supabase-js
+          npm install --no-save @aws-sdk/client-s3 @supabase/supabase-js ws
 
       - name: Run audio conversion pipeline
         env:

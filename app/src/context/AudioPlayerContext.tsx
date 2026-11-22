@@ -53,14 +53,40 @@ const AudioPlayerContext = createContext<AudioPlayerContextType | undefined>(und
 // Whether custom native TrackPlayer binary is linked (true in Production APK / Dev Client, false in Expo Go)
 const isNativePlayerAvailable = Boolean(NativeModules.TrackPlayerModule);
 
+// Lazy track player setup lock
 let isPlayerSetup = false;
+let isSettingUp = false;
 
-async function setupTrackPlayer() {
-  if (isPlayerSetup || !isNativePlayerAvailable) return;
+async function setupTrackPlayer(): Promise<boolean> {
+  if (isPlayerSetup) return true;
+  if (!isNativePlayerAvailable) return false;
+  if (isSettingUp) {
+    while (isSettingUp) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return isPlayerSetup;
+  }
+
+  isSettingUp = true;
   try {
+    // Check if player is already initialized
+    try {
+      const state = await TrackPlayer.getPlaybackState();
+      if (state && state.state !== State.None) {
+        isPlayerSetup = true;
+        isSettingUp = false;
+        return true;
+      }
+    } catch {}
+
     await TrackPlayer.setupPlayer({
       autoHandleInterruptions: true,
+      minBuffer: 15,
+      maxBuffer: 50,
+      playBuffer: 2.5,
+      backBuffer: 10,
     });
+
     await TrackPlayer.updateOptions({
       android: {
         appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
@@ -81,10 +107,16 @@ async function setupTrackPlayer() {
       ],
       progressUpdateEventInterval: 1,
     });
+
     isPlayerSetup = true;
+    return true;
   } catch (err) {
-    // Player may already be initialized
+    console.warn('TrackPlayer setupPlayer warning:', err);
+    // Even if it reported already initialized, consider it ready
     isPlayerSetup = true;
+    return true;
+  } finally {
+    isSettingUp = false;
   }
 }
 
@@ -183,10 +215,10 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const isWebViewReadyRef = useRef<boolean>(false);
   const pendingPlayRef = useRef<{ url: string; pos: number; speed: number } | null>(null);
 
-  // Setup player on mount
+  // Setup player listeners on mount
   useEffect(() => {
     if (isNativePlayerAvailable) {
-      setupTrackPlayer();
+      let progressInterval: any = null;
 
       const subState = TrackPlayer.addEventListener(Event.PlaybackState, (event) => {
         const state = (event as any).state;
@@ -206,7 +238,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       });
 
       // Poll progress every 1s when active in native player
-      const progressInterval = setInterval(async () => {
+      progressInterval = setInterval(async () => {
+        if (!isPlayerSetup) return;
         try {
           const p = await TrackPlayer.getProgress();
           setPosition(p.position);
@@ -220,7 +253,7 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         subState.remove();
         subProgress.remove();
         subQueueEnded.remove();
-        clearInterval(progressInterval);
+        if (progressInterval) clearInterval(progressInterval);
       };
     }
   }, []);

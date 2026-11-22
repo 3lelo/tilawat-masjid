@@ -48,6 +48,7 @@ if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
 // Initialize Supabase admin client with service_role key
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
+  realtime: { createClient: () => ({ on: () => ({ subscribe: () => {} }), unsubscribe: () => {} }) },
 });
 
 // Initialize S3/R2 client
