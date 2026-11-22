@@ -22,8 +22,10 @@ import {
   Plus,
   RotateCw,
   Loader2,
-  Calendar,
   Layers,
+  Filter,
+  X,
+  Info,
 } from 'lucide-react';
 
 export default function AdminDashboard() {
@@ -36,7 +38,7 @@ export default function AdminDashboard() {
   // Folders state
   const [folders, setFolders] = useState<Folder[]>([]);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  const [selectedFolderFilterId, setSelectedFolderFilterId] = useState<string | null>(null);
   const [newFolderName, setNewFolderName] = useState<string>('');
   const [newFolderType, setNewFolderType] = useState<'normal' | 'year_month'>('normal');
   const [newFolderParentId, setNewFolderParentId] = useState<string>('');
@@ -53,6 +55,17 @@ export default function AdminDashboard() {
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [retryingPipelineId, setRetryingPipelineId] = useState<string | null>(null);
+
+  // Diagnostics log modal state
+  const [diagnosticsModal, setDiagnosticsModal] = useState<{
+    open: boolean;
+    title: string;
+    details: any;
+  }>({
+    open: false,
+    title: '',
+    details: null,
+  });
 
   // Reels state
   const [reels, setReels] = useState<Reel[]>([]);
@@ -136,7 +149,7 @@ export default function AdminDashboard() {
 
       if (!error && data) {
         setFolders(data as Folder[]);
-        // Auto-expand all parent folders by default so user sees the hierarchy
+        // Auto-expand all folders by default so nested children are visible
         setExpandedFolderIds(new Set(data.map((f: Folder) => f.id)));
         if (!uploadFolderId && data.length > 0) {
           setUploadFolderId(data[0].id);
@@ -206,6 +219,29 @@ export default function AdminDashboard() {
     });
   };
 
+  // Get all descendant folder IDs (recursive) for subtree matching
+  const getAllDescendantFolderIds = (folderId: string): string[] => {
+    const directChildren = folders.filter((f) => f.parent_id === folderId);
+    let ids: string[] = [folderId];
+    for (const child of directChildren) {
+      ids = ids.concat(getAllDescendantFolderIds(child.id));
+    }
+    return ids;
+  };
+
+  // Recursive count of audio files including direct files and all nested children
+  const getSubtreeFilesCount = (folderId: string): { total: number; direct: number; hasChildren: boolean } => {
+    const direct = audioFiles.filter((a) => a.folder_id === folderId).length;
+    const descendantIds = getAllDescendantFolderIds(folderId);
+    const total = audioFiles.filter((a) => descendantIds.includes(a.folder_id)).length;
+    const directChildren = folders.filter((f) => f.parent_id === folderId);
+    return {
+      total,
+      direct,
+      hasChildren: directChildren.length > 0,
+    };
+  };
+
   // Build folder select options with indented hierarchy
   const getIndentedFolderOptions = (): { folder: Folder; depth: number }[] => {
     const result: { folder: Folder; depth: number }[] = [];
@@ -247,12 +283,12 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteFolder = async (folder: Folder) => {
-    const hasFiles = audioFiles.some((a) => a.folder_id === folder.id);
+    const subtreeCount = getSubtreeFilesCount(folder.id);
     const hasSub = folders.some((f) => f.parent_id === folder.id);
 
-    if (hasFiles || hasSub) {
+    if (subtreeCount.total > 0 || hasSub) {
       const confirmed = window.confirm(
-        `تنبيه هام: المجلد "${folder.name}" يحتوي على تلاوات أو مجلدات فرعية! هل أنت متأكد تماماً من حذفه وحذف جميع محتوياته؟`
+        `تنبيه هام: المجلد "${folder.name}" يحتوي على ${subtreeCount.total} تلاوة أو مجلدات فرعية! هل أنت متأكد تماماً من حذفه وحذف جميع محتوياته؟`
       );
       if (!confirmed) return;
     } else {
@@ -262,6 +298,9 @@ export default function AdminDashboard() {
     try {
       const { error } = await supabase.from('folders').delete().eq('id', folder.id);
       if (error) throw error;
+      if (selectedFolderFilterId === folder.id) {
+        setSelectedFolderFilterId(null);
+      }
       await loadFolders();
       await loadAudioFiles();
     } catch (err: any) {
@@ -302,16 +341,20 @@ export default function AdminDashboard() {
       const token = session?.access_token || '';
 
       const { ok, data } = await triggerConversionPipeline(audio.id, token);
-      if (ok && data.success) {
-        alert('تم إرسال أمر معالجة الملف الصوتي إلى خادم المعالجة بنجاح.');
-      } else if (data.warning) {
-        alert(`تنبيه: ${data.warning}`);
-      } else {
-        alert(`خطأ: ${data.error || 'تعذر بدء المعالجة'}`);
-      }
+      
+      setDiagnosticsModal({
+        open: true,
+        title: ok ? 'تقرير إطلاق المعالجة السحابية' : 'تنبيه: فشل إطلاق المعالجة',
+        details: data,
+      });
+
       await loadAudioFiles();
     } catch (err: any) {
-      alert(`خطأ في إطلاق المعالجة: ${err.message}`);
+      setDiagnosticsModal({
+        open: true,
+        title: 'خطأ غير متوقع',
+        details: { message: err.message, stack: err.stack },
+      });
     } finally {
       setRetryingPipelineId(null);
     }
@@ -413,10 +456,13 @@ export default function AdminDashboard() {
       setUploadProgress(100);
       if (ok && data.success) {
         setUploadMessage('تم الرفع وإطلاق المعالجة بنجاح! سيتحول الملف إلى "جاهز" فور اكتمال الضغط.');
-      } else if (data?.warning) {
-        setUploadMessage('تم رفع الملف بنجاح! تنبيه: يلزم إكمال المعالجة بعد ضبط بيانات GitHub Actions في بيئة النشر.');
       } else {
-        setUploadMessage('تم الرفع، وحدث خطأ أثناء إطلاق المعالجة التلقائية: ' + (data?.error || ''));
+        setUploadMessage('تم الرفع. اضغط زر "عرض التقرير / التشخيص" لفحص حالة سير العمل.');
+        setDiagnosticsModal({
+          open: true,
+          title: 'تقرير إطلاق خط أنابيب المعالجة',
+          details: data,
+        });
       }
 
       // Reset form
@@ -513,7 +559,8 @@ export default function AdminDashboard() {
     const children = getSubfolders(folder.id);
     const hasChildren = children.length > 0;
     const isExpanded = expandedFolderIds.has(folder.id);
-    const filesCount = audioFiles.filter((a) => a.folder_id === folder.id).length;
+    const countInfo = getSubtreeFilesCount(folder.id);
+    const isSelected = selectedFolderFilterId === folder.id;
 
     return (
       <div key={folder.id} style={{ display: 'flex', flexDirection: 'column' }}>
@@ -521,13 +568,17 @@ export default function AdminDashboard() {
           style={{
             padding: '10px 14px',
             borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--border-light)',
-            background: depth === 0 ? 'var(--surface-color)' : 'var(--surface-secondary)',
+            border: isSelected ? '2px solid var(--primary-color)' : '1px solid var(--border-light)',
+            background: isSelected
+              ? 'var(--surface-secondary)'
+              : depth === 0
+              ? 'var(--surface-color)'
+              : 'rgba(238, 243, 234, 0.45)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             marginRight: `${depth * 24}px`,
-            transition: 'background-color 0.15s ease',
+            transition: 'all 0.15s ease',
             position: 'relative',
           }}
         >
@@ -559,7 +610,7 @@ export default function AdminDashboard() {
                   alignItems: 'center',
                   color: 'var(--primary-color)',
                 }}
-                title={isExpanded ? 'طي المجلد' : 'توسيع المجلد'}
+                title={isExpanded ? 'طي المجلد الفرعي' : 'توسيع المجلد الفرعي'}
               >
                 {isExpanded ? <ChevronDown size={18} /> : <ChevronLeft size={18} />}
               </button>
@@ -567,23 +618,71 @@ export default function AdminDashboard() {
               <span style={{ width: '18px', display: 'inline-block' }} />
             )}
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <div
+              onClick={() => {
+                // Open folder to see files inside
+                setSelectedFolderFilterId(isSelected ? null : folder.id);
+                setActiveTab('audio');
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                flexWrap: 'wrap',
+                cursor: 'pointer',
+                flex: 1,
+              }}
+              title="اضغط لفتح المجلد وتصفح التلاوات الموجودة داخله"
+            >
               <span style={{ color: 'var(--primary-color)', display: 'flex', alignItems: 'center' }}>
                 {isExpanded ? <FolderOpen size={18} /> : <FolderIcon size={18} />}
               </span>
-              <span style={{ fontWeight: 700, fontSize: '14px' }}>{folder.name}</span>
+              <span style={{ fontWeight: 700, fontSize: '14px', color: isSelected ? 'var(--primary-color)' : 'var(--text-main)' }}>
+                {folder.name}
+              </span>
               {folder.type === 'year_month' && (
                 <span className="badge badge-processing" style={{ fontSize: '11px', padding: '2px 8px' }}>
                   سنة مرتبة بالأشهر
                 </span>
               )}
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                ({filesCount} تلاوة)
+              {/* Hierarchical Total Count Display */}
+              <span
+                style={{
+                  fontSize: '12px',
+                  color: countInfo.total > 0 ? 'var(--primary-color)' : 'var(--text-muted)',
+                  fontWeight: countInfo.total > 0 ? 600 : 400,
+                  backgroundColor: 'var(--surface-color)',
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  border: '1px solid var(--border-light)',
+                }}
+                title={
+                  countInfo.hasChildren
+                    ? `إجمالي ${countInfo.total} تلاوة (${countInfo.direct} مباشرة + ${countInfo.total - countInfo.direct} في المجلدات الفرعية)`
+                    : `${countInfo.direct} تلاوة مباشرة`
+                }
+              >
+                {countInfo.hasChildren
+                  ? `${countInfo.total} تلاوة شاملة`
+                  : `${countInfo.direct} تلاوة`}
               </span>
             </div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              onClick={() => {
+                setSelectedFolderFilterId(isSelected ? null : folder.id);
+                setActiveTab('audio');
+              }}
+              className="btn btn-secondary"
+              style={{ minHeight: '32px', padding: '4px 10px', fontSize: '12px' }}
+              title="عرض التلاوات داخل هذا المجلد"
+            >
+              <FileAudio size={14} />
+              <span>تصفح</span>
+            </button>
+
             <button
               onClick={() => handleDeleteFolder(folder)}
               className="btn btn-danger"
@@ -658,6 +757,16 @@ export default function AdminDashboard() {
 
   const rootFolders = getSubfolders(null);
   const folderOptions = getIndentedFolderOptions();
+
+  // Filter audio files based on selected folder filter if active
+  const filteredAudioFiles = selectedFolderFilterId
+    ? (() => {
+        const allowedIds = getAllDescendantFolderIds(selectedFolderFilterId);
+        return audioFiles.filter((a) => allowedIds.includes(a.folder_id));
+      })()
+    : audioFiles;
+
+  const selectedFolderObject = folders.find((f) => f.id === selectedFolderFilterId);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -920,23 +1029,68 @@ export default function AdminDashboard() {
 
             {/* Audio Files List */}
             <div className="card">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
                 <h2 style={{ fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <FileAudio size={20} color="var(--primary-color)" />
-                  <span>التسجيلات المحفوظة ({audioFiles.length})</span>
+                  <span>
+                    التسجيلات المحفوظة ({filteredAudioFiles.length}
+                    {selectedFolderFilterId ? ` من أصل ${audioFiles.length}` : ''})
+                  </span>
                 </h2>
-                <button
-                  onClick={loadAudioFiles}
-                  className="btn btn-secondary"
-                  style={{ minHeight: '34px', padding: '4px 10px', fontSize: '12px' }}
-                >
-                  <RotateCw size={14} />
-                  <span>تحديث</span>
-                </button>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    onClick={loadAudioFiles}
+                    className="btn btn-secondary"
+                    style={{ minHeight: '34px', padding: '4px 10px', fontSize: '12px' }}
+                  >
+                    <RotateCw size={14} />
+                    <span>تحديث</span>
+                  </button>
+                </div>
               </div>
 
+              {/* Active Folder Filter Banner */}
+              {selectedFolderFilterId && (
+                <div
+                  style={{
+                    backgroundColor: 'var(--surface-secondary)',
+                    border: '1px solid var(--border-color)',
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginBottom: '14px',
+                    fontSize: '13px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Filter size={15} color="var(--primary-color)" />
+                    <span>تصفية حسب المجلد: <strong>{selectedFolderObject?.name || 'مجلد مجهول'}</strong></span>
+                  </div>
+                  <button
+                    onClick={() => setSelectedFolderFilterId(null)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--danger-color)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                    }}
+                  >
+                    <X size={14} />
+                    <span>عرض كل التلاوات</span>
+                  </button>
+                </div>
+              )}
+
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {audioFiles.map((audio) => {
+                {filteredAudioFiles.map((audio) => {
                   const folder = folders.find((f) => f.id === audio.folder_id);
                   const isRetrying = retryingPipelineId === audio.id;
 
@@ -990,10 +1144,10 @@ export default function AdminDashboard() {
                             disabled={isRetrying}
                             className="btn btn-secondary"
                             style={{ minHeight: '36px', padding: '6px 10px', fontSize: '12px' }}
-                            title="إعادة إطلاق المعالجة السحابية"
+                            title="إعادة إطلاق المعالجة وفحص سجل التشخيص"
                           >
                             <RotateCw size={14} className={isRetrying ? 'spinner' : ''} />
-                            <span>{isRetrying ? 'جاري الإطلاق...' : 'معالجة'}</span>
+                            <span>{isRetrying ? 'جاري الفحص...' : 'تشخيص ومعالجة'}</span>
                           </button>
                         )}
 
@@ -1023,9 +1177,11 @@ export default function AdminDashboard() {
                   );
                 })}
 
-                {audioFiles.length === 0 && (
+                {filteredAudioFiles.length === 0 && (
                   <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '40px 0' }}>
-                    لا توجد تسجيلات بعد. يمكنك رفع تسجيل جديد من النموذج المقابل.
+                    {selectedFolderFilterId
+                      ? `لا توجد تلاوات في المجلد "${selectedFolderObject?.name}".`
+                      : 'لا توجد تسجيلات بعد. يمكنك رفع تسجيل جديد من النموذج المقابل.'}
                   </p>
                 )}
               </div>
@@ -1096,7 +1252,7 @@ export default function AdminDashboard() {
 
             {/* Folders Tree View */}
             <div className="card">
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
                 <h2 style={{ fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <FolderOpen size={20} color="var(--primary-color)" />
                   <span>شجرة المجلدات الهرمية ({folders.length})</span>
@@ -1234,6 +1390,90 @@ export default function AdminDashboard() {
           </div>
         )}
       </main>
+
+      {/* Diagnostics / Pipeline Log Modal */}
+      {diagnosticsModal.open && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px',
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              maxWidth: '600px',
+              width: '100%',
+              maxHeight: '85vh',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+              <h3 style={{ fontSize: '17px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Info size={18} color="var(--primary-color)" />
+                <span>{diagnosticsModal.title}</span>
+              </h3>
+              <button
+                onClick={() => setDiagnosticsModal({ open: false, title: '', details: null })}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+              يمكنك نسخ هذا التقرير وتزويدي به لمعرفة سبب تعليق المعالجة بدقة:
+            </p>
+
+            <pre
+              style={{
+                flex: 1,
+                overflowY: 'auto',
+                backgroundColor: '#1E293B',
+                color: '#F8FAFC',
+                padding: '14px',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: '12px',
+                fontFamily: 'monospace',
+                direction: 'ltr',
+                textAlign: 'left',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+              }}
+            >
+              {JSON.stringify(diagnosticsModal.details, null, 2)}
+            </pre>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px', gap: '8px' }}>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(JSON.stringify(diagnosticsModal.details, null, 2));
+                  alert('تم نسخ التقرير إلى الحافظة!');
+                }}
+                className="btn btn-secondary"
+                style={{ minHeight: '36px', padding: '6px 14px' }}
+              >
+                نسخ التقرير
+              </button>
+              <button
+                onClick={() => setDiagnosticsModal({ open: false, title: '', details: null })}
+                className="btn btn-primary"
+                style={{ minHeight: '36px', padding: '6px 14px' }}
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
