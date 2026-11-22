@@ -1,11 +1,12 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { NativeModules, View, StyleSheet } from 'react-native';
+import { WebView } from 'react-native-webview';
 import TrackPlayer, {
   Capability,
   State,
-  usePlaybackState,
-  useProgress,
   RepeatMode as TPRepeatMode,
   AppKilledPlaybackBehavior,
+  Event,
 } from 'react-native-track-player';
 import { AudioFile, supabase, isDemoMode } from '../lib/supabase';
 import { getLocalAudioUri } from '../lib/storage';
@@ -29,7 +30,7 @@ interface AudioPlayerContextType {
   isFullPlayerVisible: boolean;
   isFavourite: boolean;
   isMiniPlayerDismissed: boolean;
-  
+
   // Actions
   playTrack: (track: AudioFile, trackQueue?: AudioFile[], initialPosition?: number) => Promise<void>;
   togglePlayPause: () => Promise<void>;
@@ -49,10 +50,13 @@ interface AudioPlayerContextType {
 
 const AudioPlayerContext = createContext<AudioPlayerContextType | undefined>(undefined);
 
+// Whether custom native TrackPlayer binary is linked (true in Production APK / Dev Client, false in Expo Go)
+const isNativePlayerAvailable = Boolean(NativeModules.TrackPlayerModule);
+
 let isPlayerSetup = false;
 
 async function setupTrackPlayer() {
-  if (isPlayerSetup) return;
+  if (isPlayerSetup || !isNativePlayerAvailable) return;
   try {
     await TrackPlayer.setupPlayer({
       autoHandleInterruptions: true,
@@ -75,7 +79,7 @@ async function setupTrackPlayer() {
         Capability.Pause,
         Capability.SkipToNext,
       ],
-      progressUpdateEventInterval: 2,
+      progressUpdateEventInterval: 1,
     });
     isPlayerSetup = true;
   } catch (err) {
@@ -84,13 +88,75 @@ async function setupTrackPlayer() {
   }
 }
 
+const WEBVIEW_HTML = `
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  </head>
+  <body style="margin:0;padding:0;background:transparent;">
+    <audio id="audioEl" preload="auto" playsinline></audio>
+    <script>
+      const audio = document.getElementById('audioEl');
+
+      function sendMsg(type, payload) {
+        if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type, ...payload }));
+        }
+      }
+
+      audio.addEventListener('play', () => sendMsg('status', { playing: true }));
+      audio.addEventListener('pause', () => sendMsg('status', { playing: false }));
+      audio.addEventListener('waiting', () => sendMsg('status', { buffering: true }));
+      audio.addEventListener('playing', () => sendMsg('status', { buffering: false, playing: true }));
+      audio.addEventListener('durationchange', () => sendMsg('duration', { duration: audio.duration || 0 }));
+      audio.addEventListener('timeupdate', () => {
+        sendMsg('time', { position: audio.currentTime || 0, duration: audio.duration || 0 });
+      });
+      audio.addEventListener('ended', () => sendMsg('ended', {}));
+      audio.addEventListener('error', (e) => sendMsg('error', { message: audio.error ? audio.error.message : 'Audio playback error' }));
+
+      window.playAudio = function(url, initialPos, speed) {
+        if (audio.src !== url) {
+          audio.src = url;
+          audio.load();
+        }
+        if (speed) audio.playbackRate = speed;
+        if (initialPos && initialPos > 0) audio.currentTime = initialPos;
+        audio.play().catch(e => sendMsg('error', { message: e.message }));
+      };
+
+      window.pauseAudio = function() {
+        audio.pause();
+      };
+
+      window.resumeAudio = function() {
+        audio.play().catch(e => sendMsg('error', { message: e.message }));
+      };
+
+      window.seekAudio = function(time) {
+        audio.currentTime = time;
+      };
+
+      window.setSpeed = function(speed) {
+        audio.playbackRate = speed;
+      };
+
+      sendMsg('ready', {});
+    </script>
+  </body>
+</html>
+`;
+
 export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
-  const playbackState = usePlaybackState();
-  const progress = useProgress();
 
   const [currentTrack, setCurrentTrack] = useState<AudioFile | null>(null);
   const [queue, setQueue] = useState<AudioFile[]>([]);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [isBuffering, setIsBuffering] = useState<boolean>(false);
+  const [position, setPosition] = useState<number>(0);
+  const [duration, setDuration] = useState<number>(0);
   const [playbackSpeed, setPlaybackSpeedState] = useState<number>(1.0);
   const [repeatMode, setRepeatModeState] = useState<RepeatMode>('off');
   const [sleepTimer, setSleepTimerState] = useState<SleepTimerOption>(null);
@@ -99,20 +165,65 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [isMiniPlayerDismissed, setIsMiniPlayerDismissed] = useState<boolean>(false);
   const [isFavourite, setIsFavourite] = useState<boolean>(false);
 
+  // References for state in event callbacks
+  const currentTrackRef = useRef<AudioFile | null>(null);
+  currentTrackRef.current = currentTrack;
+  const queueRef = useRef<AudioFile[]>([]);
+  queueRef.current = queue;
+  const repeatModeRef = useRef<RepeatMode>('off');
+  repeatModeRef.current = repeatMode;
+  const playbackSpeedRef = useRef<number>(1.0);
+  playbackSpeedRef.current = playbackSpeed;
+
   const sleepTimerRef = useRef<any>(null);
   const progressSaveRef = useRef<number>(0);
 
+  // Hidden WebView for Expo Go HTML5 audio
+  const webViewRef = useRef<any>(null);
+  const isWebViewReadyRef = useRef<boolean>(false);
+  const pendingPlayRef = useRef<{ url: string; pos: number; speed: number } | null>(null);
+
   // Setup player on mount
   useEffect(() => {
-    setupTrackPlayer();
+    if (isNativePlayerAvailable) {
+      setupTrackPlayer();
+
+      const subState = TrackPlayer.addEventListener(Event.PlaybackState, (event) => {
+        const state = (event as any).state;
+        setIsPlaying(state === State.Playing);
+        setIsBuffering(state === State.Buffering || state === State.Loading);
+      });
+
+      const subProgress = TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, (event) => {
+        setPosition(event.position);
+        if (event.duration > 0) {
+          setDuration(event.duration);
+        }
+      });
+
+      const subQueueEnded = TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => {
+        handleTrackFinished();
+      });
+
+      // Poll progress every 1s when active in native player
+      const progressInterval = setInterval(async () => {
+        try {
+          const p = await TrackPlayer.getProgress();
+          setPosition(p.position);
+          if (p.duration > 0) {
+            setDuration(p.duration);
+          }
+        } catch {}
+      }, 1000);
+
+      return () => {
+        subState.remove();
+        subProgress.remove();
+        subQueueEnded.remove();
+        clearInterval(progressInterval);
+      };
+    }
   }, []);
-
-  const stateVal = typeof playbackState === 'object' && playbackState !== null && 'state' in playbackState
-    ? (playbackState as any).state
-    : playbackState;
-
-  const isPlaying = stateVal === State.Playing;
-  const isBuffering = stateVal === State.Buffering || stateVal === State.Loading;
 
   // Check favourite status when track or user changes
   useEffect(() => {
@@ -140,26 +251,53 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   // Periodic position persistence (every 5 seconds)
   useEffect(() => {
-    if (!currentTrack || !isPlaying || progress.position <= 0) return;
+    if (!currentTrack || !isPlaying || position <= 0) return;
 
-    const currentPos = Math.floor(progress.position);
+    const currentPos = Math.floor(position);
     if (Math.abs(currentPos - progressSaveRef.current) >= 5) {
       progressSaveRef.current = currentPos;
-      
+
       // Save locally
       saveLocalPlaybackProgress(currentTrack, currentPos);
 
       // Save to Supabase for signed-in users
       if (user && !isDemoMode) {
-        supabase.from('playback_progress').upsert({
-          user_id: user.id,
-          audio_id: currentTrack.id,
-          position_seconds: currentPos,
-          updated_at: new Date().toISOString(),
-        }).then(() => {});
+        supabase
+          .from('playback_progress')
+          .upsert({
+            user_id: user.id,
+            audio_id: currentTrack.id,
+            position_seconds: currentPos,
+            updated_at: new Date().toISOString(),
+          })
+          .then(() => {});
       }
     }
-  }, [progress.position, isPlaying, currentTrack, user]);
+  }, [position, isPlaying, currentTrack, user]);
+
+  // Handle track finished (auto-advance / repeat)
+  const handleTrackFinished = async () => {
+    const track = currentTrackRef.current;
+    const curQueue = queueRef.current;
+    const curRepeat = repeatModeRef.current;
+
+    if (!track || curQueue.length === 0) return;
+
+    if (curRepeat === 'repeat_one') {
+      await playTrack(track, curQueue, 0);
+      return;
+    }
+
+    const currentIndex = curQueue.findIndex((item) => item.id === track.id);
+    if (currentIndex >= 0 && currentIndex < curQueue.length - 1) {
+      const nextTrack = curQueue[currentIndex + 1];
+      await playTrack(nextTrack, curQueue, 0);
+    } else if (curRepeat === 'repeat_folder' && curQueue.length > 0) {
+      await playTrack(curQueue[0], curQueue, 0);
+    } else {
+      setIsPlaying(false);
+    }
+  };
 
   // Sleep timer interval
   useEffect(() => {
@@ -181,7 +319,7 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         secondsLeft -= 1;
         if (secondsLeft <= 0) {
           if (sleepTimerRef.current) clearInterval(sleepTimerRef.current);
-          TrackPlayer.pause();
+          pauseAudio();
           setSleepTimerState(null);
           setSleepTimerRemainingSeconds(null);
         } else {
@@ -197,13 +335,24 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   // Handle 'end_of_file' sleep timer
   useEffect(() => {
-    if (sleepTimer === 'end_of_file' && progress.duration > 0) {
-      if (progress.duration - progress.position <= 2) {
-        TrackPlayer.pause();
+    if (sleepTimer === 'end_of_file' && duration > 0) {
+      if (duration - position <= 2) {
+        pauseAudio();
         setSleepTimerState(null);
       }
     }
-  }, [sleepTimer, progress.position, progress.duration]);
+  }, [sleepTimer, position, duration]);
+
+  const pauseAudio = async () => {
+    if (isNativePlayerAvailable) {
+      try {
+        await TrackPlayer.pause();
+      } catch {}
+    } else if (webViewRef.current) {
+      webViewRef.current.injectJavaScript('window.pauseAudio && window.pauseAudio(); true;');
+      setIsPlaying(false);
+    }
+  };
 
   // Play a specific track
   const playTrack = async (
@@ -211,98 +360,146 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     trackQueue: AudioFile[] = [],
     initialPosition: number = 0
   ) => {
-    await setupTrackPlayer();
+    const effectiveQueue = trackQueue.length > 0 ? trackQueue : [track];
+    setQueue(effectiveQueue);
+    setCurrentTrack(track);
+    setIsMiniPlayerDismissed(false);
+    setPosition(initialPosition);
+    setDuration(track.duration_seconds || 0);
 
     // Check if file is downloaded locally
     const localUri = await getLocalAudioUri(track.id);
     const audioUrl = localUri || track.audio_url;
 
-    const effectiveQueue = trackQueue.length > 0 ? trackQueue : [track];
-    setQueue(effectiveQueue);
-    setCurrentTrack(track);
-    setIsMiniPlayerDismissed(false);
+    if (isNativePlayerAvailable) {
+      await setupTrackPlayer();
+      try {
+        await TrackPlayer.reset();
+        await TrackPlayer.add({
+          id: track.id,
+          url: audioUrl,
+          title: track.title,
+          artist: track.speaker,
+          artwork: 'https://images.unsplash.com/photo-1542816417-0983c9c9ad53?auto=format&fit=crop&w=400&q=80',
+          duration: track.duration_seconds,
+        });
 
-    try {
-      await TrackPlayer.reset();
-      await TrackPlayer.add({
-        id: track.id,
-        url: audioUrl,
-        title: track.title,
-        artist: track.speaker,
-        artwork: 'https://images.unsplash.com/photo-1542816417-0983c9c9ad53?auto=format&fit=crop&w=400&q=80',
-        duration: track.duration_seconds,
-      });
+        if (initialPosition > 0 && initialPosition < track.duration_seconds - 5) {
+          await TrackPlayer.seekTo(initialPosition);
+        }
 
-      if (initialPosition > 0 && initialPosition < track.duration_seconds - 5) {
-        await TrackPlayer.seekTo(initialPosition);
+        await TrackPlayer.setRate(playbackSpeedRef.current);
+        await TrackPlayer.play();
+      } catch (err) {
+        console.warn('TrackPlayer play error:', err);
       }
-
-      await TrackPlayer.setRate(playbackSpeed);
-      await TrackPlayer.play();
-    } catch (err) {
-      console.warn('TrackPlayer play error:', err);
+    } else {
+      // In Expo Go: stream through HTML5 audio WebView
+      setIsBuffering(true);
+      const speed = playbackSpeedRef.current;
+      if (isWebViewReadyRef.current && webViewRef.current) {
+        webViewRef.current.injectJavaScript(
+          `window.playAudio(${JSON.stringify(audioUrl)}, ${initialPosition}, ${speed}); true;`
+        );
+      } else {
+        pendingPlayRef.current = { url: audioUrl, pos: initialPosition, speed };
+      }
     }
   };
 
   const togglePlayPause = async () => {
-    if (isPlaying) {
-      await TrackPlayer.pause();
-    } else {
-      await TrackPlayer.play();
+    if (isNativePlayerAvailable) {
+      try {
+        if (isPlaying) {
+          await TrackPlayer.pause();
+        } else {
+          await TrackPlayer.play();
+        }
+      } catch (err) {
+        console.warn('TrackPlayer toggle error:', err);
+      }
+    } else if (webViewRef.current) {
+      if (isPlaying) {
+        webViewRef.current.injectJavaScript('window.pauseAudio && window.pauseAudio(); true;');
+      } else {
+        webViewRef.current.injectJavaScript('window.resumeAudio && window.resumeAudio(); true;');
+      }
+    } else if (currentTrack) {
+      await playTrack(currentTrack, queue, position);
     }
   };
 
   const seekTo = async (seconds: number) => {
-    await TrackPlayer.seekTo(seconds);
+    setPosition(seconds);
+    if (isNativePlayerAvailable) {
+      try {
+        await TrackPlayer.seekTo(seconds);
+      } catch (err) {
+        console.warn('TrackPlayer seek error:', err);
+      }
+    } else if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`window.seekAudio && window.seekAudio(${seconds}); true;`);
+    }
   };
 
   const skipForward15 = async () => {
-    const newPos = Math.min(progress.duration, progress.position + 15);
-    await TrackPlayer.seekTo(newPos);
+    const newPos = Math.min(position + 15, duration);
+    await seekTo(newPos);
   };
 
   const skipBackward15 = async () => {
-    const newPos = Math.max(0, progress.position - 15);
-    await TrackPlayer.seekTo(newPos);
+    const newPos = Math.max(position - 15, 0);
+    await seekTo(newPos);
   };
 
   const skipToNext = async () => {
     if (!currentTrack || queue.length === 0) return;
     const currentIndex = queue.findIndex((item) => item.id === currentTrack.id);
     if (currentIndex >= 0 && currentIndex < queue.length - 1) {
-      const nextTrack = queue[currentIndex + 1];
-      await playTrack(nextTrack, queue);
-    } else if (repeatMode === 'repeat_folder' && queue.length > 0) {
-      // Loop to beginning of folder
-      await playTrack(queue[0], queue);
+      await playTrack(queue[currentIndex + 1], queue, 0);
     }
   };
 
   const skipToPrevious = async () => {
     if (!currentTrack || queue.length === 0) return;
-    // If past 5 seconds, restart current track
-    if (progress.position > 5) {
-      await TrackPlayer.seekTo(0);
+    if (position > 5) {
+      await seekTo(0);
       return;
     }
     const currentIndex = queue.findIndex((item) => item.id === currentTrack.id);
     if (currentIndex > 0) {
-      const prevTrack = queue[currentIndex - 1];
-      await playTrack(prevTrack, queue);
+      await playTrack(queue[currentIndex - 1], queue, 0);
+    } else {
+      await seekTo(0);
     }
   };
 
   const setPlaybackSpeed = async (speed: number) => {
     setPlaybackSpeedState(speed);
-    await TrackPlayer.setRate(speed);
+    playbackSpeedRef.current = speed;
+    if (isNativePlayerAvailable) {
+      try {
+        await TrackPlayer.setRate(speed);
+      } catch (err) {
+        console.warn('TrackPlayer rate error:', err);
+      }
+    } else if (webViewRef.current) {
+      webViewRef.current.injectJavaScript(`window.setSpeed && window.setSpeed(${speed}); true;`);
+    }
   };
 
   const setRepeatMode = async (mode: RepeatMode) => {
     setRepeatModeState(mode);
-    if (mode === 'repeat_one') {
-      await TrackPlayer.setRepeatMode(TPRepeatMode.Track);
-    } else {
-      await TrackPlayer.setRepeatMode(TPRepeatMode.Off);
+    repeatModeRef.current = mode;
+    if (isNativePlayerAvailable) {
+      try {
+        let tpMode = TPRepeatMode.Off;
+        if (mode === 'repeat_one') tpMode = TPRepeatMode.Track;
+        else if (mode === 'repeat_folder') tpMode = TPRepeatMode.Queue;
+        await TrackPlayer.setRepeatMode(tpMode);
+      } catch (err) {
+        console.warn('TrackPlayer repeatMode error:', err);
+      }
     }
   };
 
@@ -318,35 +515,68 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setIsFullPlayerVisible(false);
   };
 
-  const dismissMiniPlayer = async () => {
+  const dismissMiniPlayer = () => {
     setIsMiniPlayerDismissed(true);
-    await TrackPlayer.pause();
   };
 
   const toggleFavourite = async (): Promise<boolean> => {
     if (!currentTrack) return false;
+    const nextState = !isFavourite;
+    setIsFavourite(nextState);
 
-    if (user && !isDemoMode) {
-      if (isFavourite) {
-        await supabase
-          .from('favourites')
-          .delete()
-          .eq('user_id', user.id)
-          .eq('audio_id', currentTrack.id);
-        setIsFavourite(false);
-        return false;
+    try {
+      if (user && !isDemoMode) {
+        if (nextState) {
+          await supabase.from('favourites').insert({
+            user_id: user.id,
+            audio_id: currentTrack.id,
+          });
+        } else {
+          await supabase
+            .from('favourites')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('audio_id', currentTrack.id);
+        }
       } else {
-        await supabase
-          .from('favourites')
-          .insert({ user_id: user.id, audio_id: currentTrack.id });
-        setIsFavourite(true);
-        return true;
+        await toggleLocalFavourite(currentTrack.id);
       }
-    } else {
-      const newState = await toggleLocalFavourite(currentTrack.id);
-      setIsFavourite(newState);
-      return newState;
+      return nextState;
+    } catch {
+      setIsFavourite(!nextState);
+      return !nextState;
     }
+  };
+
+  const onWebViewMessage = (event: any) => {
+    try {
+      const data = JSON.parse(event.nativeEvent.data);
+      if (data.type === 'ready') {
+        isWebViewReadyRef.current = true;
+        if (pendingPlayRef.current && webViewRef.current) {
+          const { url, pos, speed } = pendingPlayRef.current;
+          pendingPlayRef.current = null;
+          webViewRef.current.injectJavaScript(
+            `window.playAudio(${JSON.stringify(url)}, ${pos}, ${speed}); true;`
+          );
+        }
+      } else if (data.type === 'status') {
+        if (typeof data.playing === 'boolean') setIsPlaying(data.playing);
+        if (typeof data.buffering === 'boolean') setIsBuffering(data.buffering);
+      } else if (data.type === 'duration') {
+        if (data.duration > 0) setDuration(data.duration);
+      } else if (data.type === 'time') {
+        setPosition(data.position || 0);
+        if (data.duration > 0) setDuration(data.duration);
+        setIsBuffering(false);
+      } else if (data.type === 'ended') {
+        handleTrackFinished();
+      } else if (data.type === 'error') {
+        console.warn('WebView Audio error:', data.message);
+        setIsBuffering(false);
+        setIsPlaying(false);
+      }
+    } catch {}
   };
 
   return (
@@ -356,8 +586,8 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         queue,
         isPlaying,
         isBuffering,
-        position: progress.position,
-        duration: progress.duration || currentTrack?.duration_seconds || 0,
+        position,
+        duration,
         playbackSpeed,
         repeatMode,
         sleepTimer,
@@ -382,9 +612,33 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }}
     >
       {children}
+      {!isNativePlayerAvailable && (
+        <View style={styles.hiddenWebView}>
+          {React.createElement(WebView as any, {
+            ref: webViewRef,
+            source: { html: WEBVIEW_HTML },
+            originWhitelist: ['*'],
+            javaScriptEnabled: true,
+            domStorageEnabled: true,
+            allowsInlineMediaPlayback: true,
+            mediaPlaybackRequiresUserAction: false,
+            mixedContentMode: 'always',
+            onMessage: onWebViewMessage,
+          })}
+        </View>
+      )}
     </AudioPlayerContext.Provider>
   );
 };
+
+const styles = StyleSheet.create({
+  hiddenWebView: {
+    width: 0,
+    height: 0,
+    position: 'absolute',
+    opacity: 0,
+  },
+});
 
 export const useAudioPlayer = (): AudioPlayerContextType => {
   const context = useContext(AudioPlayerContext);

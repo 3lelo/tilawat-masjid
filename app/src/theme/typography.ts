@@ -1,18 +1,9 @@
 import { Platform, TextStyle } from 'react-native';
 
 export const typography = {
-  fontFamily: Platform.select({
-    android: 'Cairo-Regular',
-    default: 'System',
-  }),
-  fontFamilyBold: Platform.select({
-    android: 'Cairo-Bold',
-    default: 'System',
-  }),
-  fontFamilyMedium: Platform.select({
-    android: 'Cairo-Medium',
-    default: 'System',
-  }),
+  fontFamily: 'Cairo-Regular',
+  fontFamilyBold: 'Cairo-Bold',
+  fontFamilyMedium: 'Cairo-Medium',
 
   // Font sizes
   sizes: {

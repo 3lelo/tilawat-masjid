@@ -1,8 +1,13 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { Platform } from 'react-native';
+import { Platform, Alert, NativeModules } from 'react-native';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
+import Constants from 'expo-constants';
 import { supabase, Profile, isDemoMode } from '../lib/supabase';
 import { Session, User } from '@supabase/supabase-js';
+
+// Check if running inside Expo Go or without custom native Google Sign-in binary
+export const isExpoGo = Constants.appOwnership === 'expo';
+export const isNativeGoogleAuthAvailable = !isExpoGo && Boolean(NativeModules.RNGoogleSignin);
 
 interface AuthContextType {
   user: User | null;
@@ -26,15 +31,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
-  // Configure Google Sign In
+  // Configure Google Sign In only when native module is present
   useEffect(() => {
-    try {
-      GoogleSignin.configure({
-        webClientId: GOOGLE_WEB_CLIENT_ID,
-        offlineAccess: true,
-      });
-    } catch (e) {
-      console.warn('GoogleSignin configure error:', e);
+    if (isNativeGoogleAuthAvailable) {
+      try {
+        GoogleSignin.configure({
+          webClientId: GOOGLE_WEB_CLIENT_ID,
+          offlineAccess: true,
+        });
+      } catch (e) {
+        console.warn('GoogleSignin configure error:', e);
+      }
     }
   }, []);
 
@@ -101,17 +108,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setIsLoading(true);
 
-      if (isDemoMode) {
-        // Demo mode mock login for previewing signed-in & admin features
+      // In Expo Go or demo mode, provide demo account for full functionality preview
+      if (isDemoMode || !isNativeGoogleAuthAvailable) {
         const mockProfile: Profile = {
           id: 'demo-user-123',
-          display_name: 'أحمد عبد الله (مدير تجريبي)',
+          display_name: 'أحمد عبد الله (حساب تجريبي)',
           avatar_url: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=160&q=80',
           role: 'admin',
           created_at: new Date().toISOString(),
         };
         setProfile(mockProfile);
         setUser({ id: mockProfile.id, email: 'demo@example.com' } as any);
+
+        if (!isNativeGoogleAuthAvailable && !isDemoMode) {
+          Alert.alert(
+            'وضع التجربة (Expo Go)',
+            'تم تسجيل الدخول بحساب تجريبي لأن تسجيل الدخول عبر Google الأصلي يتطلب حزمة الإنتاج (Production APK / Development Build). في تطبيق الإنتاج سيعمل تسجيل الدخول عبر Google الحقيقي مباشرة.',
+            [{ text: 'حسناً' }]
+          );
+        }
         setIsLoading(false);
         return;
       }
@@ -154,9 +169,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signOut = async () => {
     try {
       setIsLoading(true);
-      if (!isDemoMode) {
-        await GoogleSignin.signOut();
-        await supabase.auth.signOut();
+      if (!isDemoMode && isNativeGoogleAuthAvailable) {
+        await GoogleSignin.signOut().catch(() => {});
+        await supabase.auth.signOut().catch(() => {});
+      } else if (!isDemoMode) {
+        await supabase.auth.signOut().catch(() => {});
       }
       setSession(null);
       setUser(null);

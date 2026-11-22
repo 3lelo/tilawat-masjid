@@ -1,0 +1,152 @@
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
+index b2409a0..42efd37 100644
+--- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
+@@ -545,7 +545,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+         if (verifyServiceBoundOrReject(callback)) return@launch
+ 
+         if (index >= 0 && index < musicService.tracks.size) {
+-            callback.resolve(Arguments.fromBundle(musicService.tracks[index].originalItem))
++            callback.resolve(musicService.tracks[index].originalItem?.let { Arguments.fromBundle(it) })
+         } else {
+             callback.resolve(null)
+         }
+@@ -584,9 +584,9 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+         if (verifyServiceBoundOrReject(callback)) return@launch
+         callback.resolve(
+             if (musicService.tracks.isEmpty()) null
+-            else Arguments.fromBundle(
+-                musicService.tracks[musicService.getCurrentTrackIndex()].originalItem
+-            )
++            else musicService.tracks[musicService.getCurrentTrackIndex()].originalItem?.let {
++                Arguments.fromBundle(it)
++            }
+         )
+     }
+ 
+diff --git a/node_modules/react-native-track-player/lib/src/TrackPlayerModule.js b/node_modules/react-native-track-player/lib/src/TrackPlayerModule.js
+index 56ebacd..6c952a4 100644
+--- a/node_modules/react-native-track-player/lib/src/TrackPlayerModule.js
++++ b/node_modules/react-native-track-player/lib/src/TrackPlayerModule.js
+@@ -1,3 +1,57 @@
+ import { NativeModules } from 'react-native';
+-const { TrackPlayerModule } = NativeModules;
++
++const dummyFallback = {
++  CAPABILITY_PLAY: 0,
++  CAPABILITY_PLAY_FROM_ID: 1,
++  CAPABILITY_PLAY_FROM_SEARCH: 2,
++  CAPABILITY_PAUSE: 3,
++  CAPABILITY_STOP: 4,
++  CAPABILITY_SEEK_TO: 5,
++  CAPABILITY_SKIP: 6,
++  CAPABILITY_SKIP_TO_NEXT: 7,
++  CAPABILITY_SKIP_TO_PREVIOUS: 8,
++  CAPABILITY_JUMP_FORWARD: 9,
++  CAPABILITY_JUMP_BACKWARD: 10,
++  CAPABILITY_SET_RATING: 11,
++  CAPABILITY_LIKE: 12,
++  CAPABILITY_DISLIKE: 13,
++  CAPABILITY_BOOKMARK: 14,
++
++  PITCH_ALGORITHM_LINEAR: 0,
++  PITCH_ALGORITHM_MUSIC: 1,
++  PITCH_ALGORITHM_VOICE: 2,
++
++  RATING_HEART: 0,
++  RATING_THUMBS_UP_DOWN: 1,
++  RATING_3_STARS: 2,
++  RATING_4_STARS: 3,
++  RATING_5_STARS: 4,
++  RATING_PERCENTAGE: 5,
++
++  REPEAT_OFF: 0,
++  REPEAT_TRACK: 1,
++  REPEAT_QUEUE: 2,
++
++  setupPlayer: () => Promise.resolve(),
++  updateOptions: () => Promise.resolve(),
++  reset: () => Promise.resolve(),
++  add: () => Promise.resolve(),
++  remove: () => Promise.resolve(),
++  skip: () => Promise.resolve(),
++  skipToNext: () => Promise.resolve(),
++  skipToPrevious: () => Promise.resolve(),
++  play: () => Promise.resolve(),
++  pause: () => Promise.resolve(),
++  stop: () => Promise.resolve(),
++  seekTo: () => Promise.resolve(),
++  setRate: () => Promise.resolve(),
++  setRepeatMode: () => Promise.resolve(),
++  getProgress: () => Promise.resolve({ position: 0, duration: 0, buffered: 0 }),
++  getPlaybackState: () => Promise.resolve({ state: 'none' }),
++  addListener: () => {},
++  removeListeners: () => {},
++};
++
++const TrackPlayerModule = NativeModules.TrackPlayerModule || dummyFallback;
++
+ export default TrackPlayerModule;
+diff --git a/node_modules/react-native-track-player/src/TrackPlayerModule.ts b/node_modules/react-native-track-player/src/TrackPlayerModule.ts
+index 56ebacd..03c1edc 100644
+--- a/node_modules/react-native-track-player/src/TrackPlayerModule.ts
++++ b/node_modules/react-native-track-player/src/TrackPlayerModule.ts
+@@ -1,3 +1,57 @@
+ import { NativeModules } from 'react-native';
+-const { TrackPlayerModule } = NativeModules;
++
++const dummyFallback: any = {
++  CAPABILITY_PLAY: 0,
++  CAPABILITY_PLAY_FROM_ID: 1,
++  CAPABILITY_PLAY_FROM_SEARCH: 2,
++  CAPABILITY_PAUSE: 3,
++  CAPABILITY_STOP: 4,
++  CAPABILITY_SEEK_TO: 5,
++  CAPABILITY_SKIP: 6,
++  CAPABILITY_SKIP_TO_NEXT: 7,
++  CAPABILITY_SKIP_TO_PREVIOUS: 8,
++  CAPABILITY_JUMP_FORWARD: 9,
++  CAPABILITY_JUMP_BACKWARD: 10,
++  CAPABILITY_SET_RATING: 11,
++  CAPABILITY_LIKE: 12,
++  CAPABILITY_DISLIKE: 13,
++  CAPABILITY_BOOKMARK: 14,
++
++  PITCH_ALGORITHM_LINEAR: 0,
++  PITCH_ALGORITHM_MUSIC: 1,
++  PITCH_ALGORITHM_VOICE: 2,
++
++  RATING_HEART: 0,
++  RATING_THUMBS_UP_DOWN: 1,
++  RATING_3_STARS: 2,
++  RATING_4_STARS: 3,
++  RATING_5_STARS: 4,
++  RATING_PERCENTAGE: 5,
++
++  REPEAT_OFF: 0,
++  REPEAT_TRACK: 1,
++  REPEAT_QUEUE: 2,
++
++  setupPlayer: () => Promise.resolve(),
++  updateOptions: () => Promise.resolve(),
++  reset: () => Promise.resolve(),
++  add: () => Promise.resolve(),
++  remove: () => Promise.resolve(),
++  skip: () => Promise.resolve(),
++  skipToNext: () => Promise.resolve(),
++  skipToPrevious: () => Promise.resolve(),
++  play: () => Promise.resolve(),
++  pause: () => Promise.resolve(),
++  stop: () => Promise.resolve(),
++  seekTo: () => Promise.resolve(),
++  setRate: () => Promise.resolve(),
++  setRepeatMode: () => Promise.resolve(),
++  getProgress: () => Promise.resolve({ position: 0, duration: 0, buffered: 0 }),
++  getPlaybackState: () => Promise.resolve({ state: 'none' }),
++  addListener: () => {},
++  removeListeners: () => {},
++};
++
++const TrackPlayerModule = NativeModules.TrackPlayerModule || dummyFallback;
++
+ export default TrackPlayerModule;
