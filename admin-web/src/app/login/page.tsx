@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase, isDemoMode } from '@/lib/supabaseClient';
-import { LogIn, ShieldAlert, CheckCircle2 } from 'lucide-react';
+import { LogIn, ShieldAlert, CheckCircle2, Phone, Facebook } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -130,9 +130,50 @@ export default function LoginPage() {
           <span>{loading ? 'جاري التحقق...' : 'تسجيل الدخول بحساب Google'}</span>
         </button>
 
-        <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '20px' }}>
-          إذا كنت مسؤولاً جديداً، تأكد من ترقية دور حسابك إلى <code style={{ direction: 'ltr', display: 'inline-block' }}>admin</code> في لوحة Supabase كما هو موضح في دليل الإعداد.
-        </p>
+        <div style={{
+          marginTop: '28px',
+          paddingTop: '20px',
+          borderTop: '1px solid var(--border-light)',
+          fontSize: '13px',
+          color: 'var(--text-muted)',
+        }}>
+          <p style={{ fontWeight: 600, color: 'var(--text-main)', marginBottom: '8px' }}>
+            تطوير وبرمجة: علي عدنان (Ali Adnan)
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px', flexWrap: 'wrap' }}>
+            <a
+              href="tel:+972595547471"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: 'var(--primary-color)',
+                textDecoration: 'none',
+                fontWeight: 600,
+                direction: 'ltr',
+              }}
+            >
+              <Phone size={15} />
+              <span>+972 595547471</span>
+            </a>
+            <a
+              href="https://www.facebook.com/ali08adnan"
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: '#1877F2',
+                textDecoration: 'none',
+                fontWeight: 600,
+              }}
+            >
+              <Facebook size={15} />
+              <span>Facebook</span>
+            </a>
+          </div>
+        </div>
       </div>
     </main>
   );

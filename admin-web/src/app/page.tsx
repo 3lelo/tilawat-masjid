@@ -26,6 +26,8 @@ import {
   Filter,
   X,
   Info,
+  Phone,
+  Facebook,
 } from 'lucide-react';
 
 export default function AdminDashboard() {
@@ -1390,6 +1392,71 @@ export default function AdminDashboard() {
           </div>
         )}
       </main>
+
+      {/* Footer with Developer Credits */}
+      <footer
+        style={{
+          borderTop: '1px solid var(--border-light)',
+          background: 'var(--surface-color)',
+          padding: '16px 20px',
+          marginTop: 'auto',
+          fontSize: '13px',
+          color: 'var(--text-muted)',
+        }}
+      >
+        <div
+          style={{
+            maxWidth: '1200px',
+            margin: '0 auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px',
+          }}
+        >
+          <div>
+            <span>تلاوات المسجد الكبير • لوحة تحكم المشرف</span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>
+              تطوير: علي عدنان (Ali Adnan)
+            </span>
+            <a
+              href="tel:+972595547471"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                color: 'var(--primary-color)',
+                textDecoration: 'none',
+                fontWeight: 600,
+                direction: 'ltr',
+              }}
+            >
+              <Phone size={14} />
+              <span>+972 595547471</span>
+            </a>
+            <a
+              href="https://www.facebook.com/ali08adnan"
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                color: '#1877F2',
+                textDecoration: 'none',
+                fontWeight: 600,
+              }}
+            >
+              <Facebook size={14} />
+              <span>Facebook</span>
+            </a>
+          </div>
+        </div>
+      </footer>
 
       {/* Diagnostics / Pipeline Log Modal */}
       {diagnosticsModal.open && (

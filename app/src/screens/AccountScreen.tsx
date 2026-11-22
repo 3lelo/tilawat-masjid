@@ -342,7 +342,7 @@ export const AccountScreen: React.FC = () => {
           )}
         </View>
 
-        {/* Mosque Info Card */}
+        {/* Mosque Info & Developer Credits Card */}
         <View style={styles.mosqueCard}>
           <Text
             style={[
@@ -360,6 +360,64 @@ export const AccountScreen: React.FC = () => {
           >
             الإصدار 1.0.0 • وقف لله تعالى
           </Text>
+
+          {/* Developer Credits */}
+          <View
+            style={[
+              styles.creditsBox,
+              {
+                backgroundColor: colors.surface,
+                borderColor: colors.borderLight,
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.creditsTitle,
+                { color: colors.text, fontFamily: typography.fontFamilyBold },
+              ]}
+            >
+              تطوير وبرمجة: علي عدنان (Ali Adnan)
+            </Text>
+
+            <View style={styles.creditsRow}>
+              <TouchableOpacity
+                onPress={() => Linking.openURL('tel:+972595547471')}
+                style={[
+                  styles.creditBtn,
+                  { backgroundColor: colors.surfaceSecondary },
+                ]}
+              >
+                <Ionicons name="call-outline" size={16} color={colors.primary} />
+                <Text
+                  style={[
+                    styles.creditBtnText,
+                    { color: colors.primary, fontFamily: typography.fontFamilyBold },
+                  ]}
+                >
+                  +972 595547471
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => Linking.openURL('https://www.facebook.com/ali08adnan')}
+                style={[
+                  styles.creditBtn,
+                  { backgroundColor: '#1877F215' },
+                ]}
+              >
+                <Ionicons name="logo-facebook" size={16} color="#1877F2" />
+                <Text
+                  style={[
+                    styles.creditBtnText,
+                    { color: '#1877F2', fontFamily: typography.fontFamilyBold },
+                  ]}
+                >
+                  Facebook
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </ScrollView>
     </ScreenBackground>
@@ -583,5 +641,38 @@ const styles = StyleSheet.create({
   mosqueSub: {
     fontSize: 11,
     marginTop: 4,
+  },
+  creditsBox: {
+    marginTop: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    width: '100%',
+  },
+  creditsTitle: {
+    fontSize: 12,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  creditsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  creditBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  creditBtnText: {
+    fontSize: 11,
+    direction: 'ltr',
   },
 });
