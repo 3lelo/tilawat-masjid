@@ -382,7 +382,7 @@ export const AccountScreen: React.FC = () => {
 
             <View style={styles.creditsRow}>
               <TouchableOpacity
-                onPress={() => Linking.openURL('tel:+972595547471')}
+                onPress={() => Linking.openURL('tel:+972595547471').catch(() => {})}
                 style={[
                   styles.creditBtn,
                   { backgroundColor: colors.surfaceSecondary },
@@ -400,7 +400,7 @@ export const AccountScreen: React.FC = () => {
               </TouchableOpacity>
 
               <TouchableOpacity
-                onPress={() => Linking.openURL('https://www.facebook.com/ali08adnan')}
+                onPress={() => Linking.openURL('https://www.facebook.com/ali08adnan').catch(() => {})}
                 style={[
                   styles.creditBtn,
                   { backgroundColor: '#1877F215' },

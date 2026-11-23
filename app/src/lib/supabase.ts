@@ -4,8 +4,11 @@ import { createClient } from '@supabase/supabase-js';
 
 // Environment variables or fallback placeholders
 // In production, these are provided via app config or .env
-export const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://demo-project.supabase.co';
-export const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy';
+export const SUPABASE_URL =
+  process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://fawnbiuxaatnohzamswp.supabase.co';
+export const SUPABASE_ANON_KEY =
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZhd25iaXV4YWF0bm9oemFtc3dwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwMzA1NDEsImV4cCI6MjExMDYwNjU0MX0.Zxpm8pKPrTBwVhMLZkypppv6ErdnNO4mkNdqN-gZclQ';
 
 export const isDemoMode = SUPABASE_URL.includes('demo-project');
 

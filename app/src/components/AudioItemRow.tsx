@@ -92,10 +92,7 @@ export const AudioItemRow: React.FC<AudioItemRowProps> = ({
         {onToggleFavourite && (
           <TouchableOpacity
             style={styles.favButton}
-            onPress={(e) => {
-              e.stopPropagation();
-              onToggleFavourite();
-            }}
+            onPress={onToggleFavourite}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
             <Ionicons

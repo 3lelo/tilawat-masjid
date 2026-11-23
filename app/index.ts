@@ -14,14 +14,24 @@ if (!I18nManager.isRTL) {
   }
 }
 
-// Register background audio playback service only when native TrackPlayer is available
-// (In Expo Go, TrackPlayer native module is absent and expo-audio is used instead)
-if (NativeModules.TrackPlayerModule) {
-  try {
-    TrackPlayer.registerPlaybackService(() => PlaybackService);
-  } catch (e) {
-    console.warn('TrackPlayer service registration warning:', e);
-  }
+// Register background audio playback service
+// Must be registered unconditionally at root entry point for Android HeadlessJsTaskService
+try {
+  TrackPlayer.registerPlaybackService(() => PlaybackService);
+} catch (e) {
+  console.warn('TrackPlayer service registration warning:', e);
+}
+
+// Global JS Exception Handler to prevent process termination on unhandled errors
+const globalScope = typeof globalThis !== 'undefined' ? (globalThis as any) : undefined;
+if (globalScope?.ErrorUtils) {
+  const defaultHandler = globalScope.ErrorUtils.getGlobalHandler();
+  globalScope.ErrorUtils.setGlobalHandler((error: any, isFatal?: boolean) => {
+    console.warn('Global error caught:', error);
+    if (__DEV__ && defaultHandler) {
+      defaultHandler(error, isFatal);
+    }
+  });
 }
 
 registerRootComponent(App);

@@ -112,9 +112,8 @@ async function setupTrackPlayer(): Promise<boolean> {
     return true;
   } catch (err) {
     console.warn('TrackPlayer setupPlayer warning:', err);
-    // Even if it reported already initialized, consider it ready
-    isPlayerSetup = true;
-    return true;
+    isPlayerSetup = false;
+    return false;
   } finally {
     isSettingUp = false;
   }
@@ -272,13 +271,18 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         .eq('user_id', user.id)
         .eq('audio_id', currentTrack.id)
         .maybeSingle()
-        .then(({ data }) => {
-          setIsFavourite(!!data);
-        });
+        .then(
+          ({ data }) => {
+            setIsFavourite(!!data);
+          },
+          () => {}
+        );
     } else {
-      getLocalFavourites().then((favs) => {
-        setIsFavourite(favs.includes(currentTrack.id));
-      });
+      getLocalFavourites()
+        .then((favs) => {
+          setIsFavourite(favs.includes(currentTrack.id));
+        })
+        .catch(() => {});
     }
   }, [currentTrack, user]);
 
@@ -303,7 +307,10 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
             position_seconds: currentPos,
             updated_at: new Date().toISOString(),
           })
-          .then(() => {});
+          .then(
+            () => {},
+            () => {}
+          );
       }
     }
   }, [position, isPlaying, currentTrack, user]);
@@ -393,50 +400,74 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
     trackQueue: AudioFile[] = [],
     initialPosition: number = 0
   ) => {
-    const effectiveQueue = trackQueue.length > 0 ? trackQueue : [track];
+    if (!track) return;
+    const cleanQueue = (trackQueue && trackQueue.length > 0 ? trackQueue : [track]).filter(
+      (t) => t && t.audio_url
+    );
+    const effectiveQueue = cleanQueue.length > 0 ? cleanQueue : [track];
     setQueue(effectiveQueue);
     setCurrentTrack(track);
     setIsMiniPlayerDismissed(false);
-    setPosition(initialPosition);
+    setPosition(Math.max(0, initialPosition || 0));
     setDuration(track.duration_seconds || 0);
 
     // Check if file is downloaded locally
-    const localUri = await getLocalAudioUri(track.id);
-    const audioUrl = localUri || track.audio_url;
+    let audioUrl = track.audio_url;
+    try {
+      const localUri = await getLocalAudioUri(track.id);
+      if (localUri) audioUrl = localUri;
+    } catch {}
+
+    if (!audioUrl || !audioUrl.trim()) {
+      console.warn('Cannot play track without valid audio URL');
+      return;
+    }
 
     if (isNativePlayerAvailable) {
-      await setupTrackPlayer();
       try {
-        await TrackPlayer.reset();
-        await TrackPlayer.add({
-          id: track.id,
-          url: audioUrl,
-          title: track.title,
-          artist: track.speaker,
-          artwork: 'https://images.unsplash.com/photo-1542816417-0983c9c9ad53?auto=format&fit=crop&w=400&q=80',
-          duration: track.duration_seconds,
-        });
+        const setupSuccess = await setupTrackPlayer();
+        if (setupSuccess) {
+          try {
+            await TrackPlayer.reset();
+            await TrackPlayer.add({
+              id: track.id,
+              url: audioUrl,
+              title: track.title || 'تسجيل قرآني',
+              artist: track.speaker || 'قارئ',
+              duration:
+                typeof track.duration_seconds === 'number' && !isNaN(track.duration_seconds) && track.duration_seconds > 0
+                  ? track.duration_seconds
+                  : 0,
+            });
 
-        if (initialPosition > 0 && initialPosition < track.duration_seconds - 5) {
-          await TrackPlayer.seekTo(initialPosition);
+            if (initialPosition > 0 && initialPosition < (track.duration_seconds || 0) - 5) {
+              await TrackPlayer.seekTo(initialPosition);
+            }
+
+            const currentSpeed = playbackSpeedRef.current || 1.0;
+            await TrackPlayer.setRate(currentSpeed);
+            await TrackPlayer.play();
+            return;
+          } catch (err) {
+            console.warn('TrackPlayer play error, falling back:', err);
+          }
         }
+      } catch (nativeSetupErr) {
+        console.warn('setupTrackPlayer failed, falling back:', nativeSetupErr);
+      }
+    }
 
-        await TrackPlayer.setRate(playbackSpeedRef.current);
-        await TrackPlayer.play();
-      } catch (err) {
-        console.warn('TrackPlayer play error:', err);
-      }
-    } else {
-      // In Expo Go: stream through HTML5 audio WebView
-      setIsBuffering(true);
-      const speed = playbackSpeedRef.current;
-      if (isWebViewReadyRef.current && webViewRef.current) {
+    // In Expo Go or Native fallback: stream through HTML5 audio WebView
+    setIsBuffering(true);
+    const speed = playbackSpeedRef.current || 1.0;
+    if (isWebViewReadyRef.current && webViewRef.current) {
+      try {
         webViewRef.current.injectJavaScript(
-          `window.playAudio(${JSON.stringify(audioUrl)}, ${initialPosition}, ${speed}); true;`
+          `window.playAudio(${JSON.stringify(audioUrl)}, ${initialPosition || 0}, ${speed}); true;`
         );
-      } else {
-        pendingPlayRef.current = { url: audioUrl, pos: initialPosition, speed };
-      }
+      } catch {}
+    } else {
+      pendingPlayRef.current = { url: audioUrl, pos: initialPosition || 0, speed };
     }
   };
 
@@ -463,15 +494,19 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const seekTo = async (seconds: number) => {
-    setPosition(seconds);
+    if (typeof seconds !== 'number' || isNaN(seconds)) return;
+    const safeSeconds = Math.max(0, seconds);
+    setPosition(safeSeconds);
     if (isNativePlayerAvailable) {
       try {
-        await TrackPlayer.seekTo(seconds);
+        await TrackPlayer.seekTo(safeSeconds);
       } catch (err) {
         console.warn('TrackPlayer seek error:', err);
       }
     } else if (webViewRef.current) {
-      webViewRef.current.injectJavaScript(`window.seekAudio && window.seekAudio(${seconds}); true;`);
+      try {
+        webViewRef.current.injectJavaScript(`window.seekAudio && window.seekAudio(${safeSeconds}); true;`);
+      } catch {}
     }
   };
 
@@ -508,6 +543,7 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const setPlaybackSpeed = async (speed: number) => {
+    if (typeof speed !== 'number' || isNaN(speed) || speed <= 0) return;
     setPlaybackSpeedState(speed);
     playbackSpeedRef.current = speed;
     if (isNativePlayerAvailable) {
@@ -517,7 +553,9 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
         console.warn('TrackPlayer rate error:', err);
       }
     } else if (webViewRef.current) {
-      webViewRef.current.injectJavaScript(`window.setSpeed && window.setSpeed(${speed}); true;`);
+      try {
+        webViewRef.current.injectJavaScript(`window.setSpeed && window.setSpeed(${speed}); true;`);
+      } catch {}
     }
   };
 
@@ -645,21 +683,20 @@ export const AudioPlayerProvider: React.FC<{ children: React.ReactNode }> = ({ c
       }}
     >
       {children}
-      {!isNativePlayerAvailable && (
-        <View style={styles.hiddenWebView}>
-          {React.createElement(WebView as any, {
-            ref: webViewRef,
-            source: { html: WEBVIEW_HTML },
-            originWhitelist: ['*'],
-            javaScriptEnabled: true,
-            domStorageEnabled: true,
-            allowsInlineMediaPlayback: true,
-            mediaPlaybackRequiresUserAction: false,
-            mixedContentMode: 'always',
-            onMessage: onWebViewMessage,
-          })}
-        </View>
-      )}
+      {/* Hidden WebView audio player fallback for Expo Go and native failsafe */}
+      <View style={styles.hiddenWebView}>
+        {React.createElement(WebView as any, {
+          ref: webViewRef,
+          source: { html: WEBVIEW_HTML },
+          originWhitelist: ['*'],
+          javaScriptEnabled: true,
+          domStorageEnabled: true,
+          allowsInlineMediaPlayback: true,
+          mediaPlaybackRequiresUserAction: false,
+          mixedContentMode: 'always',
+          onMessage: onWebViewMessage,
+        })}
+      </View>
     </AudioPlayerContext.Provider>
   );
 };

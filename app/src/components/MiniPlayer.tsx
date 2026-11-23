@@ -39,18 +39,11 @@ export const MiniPlayer: React.FC = () => {
         />
       </View>
 
-      <TouchableOpacity
-        style={styles.innerRow}
-        onPress={openFullPlayer}
-        activeOpacity={0.9}
-      >
+      <View style={styles.innerRow}>
         {/* Play / Pause */}
         <TouchableOpacity
           style={[styles.playButton, { backgroundColor: colors.primary }]}
-          onPress={(e) => {
-            e.stopPropagation();
-            togglePlayPause();
-          }}
+          onPress={togglePlayPause}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <Ionicons
@@ -61,8 +54,12 @@ export const MiniPlayer: React.FC = () => {
           />
         </TouchableOpacity>
 
-        {/* Track info */}
-        <View style={styles.textColumn}>
+        {/* Track info - tap to open full player */}
+        <TouchableOpacity
+          style={styles.textColumn}
+          onPress={openFullPlayer}
+          activeOpacity={0.7}
+        >
           <Text
             style={[styles.title, { color: colors.text, fontFamily: typography.fontFamilyBold }]}
             numberOfLines={1}
@@ -75,20 +72,17 @@ export const MiniPlayer: React.FC = () => {
           >
             {currentTrack.speaker}
           </Text>
-        </View>
+        </TouchableOpacity>
 
         {/* Dismiss mini-player button */}
         <TouchableOpacity
           style={styles.closeButton}
-          onPress={(e) => {
-            e.stopPropagation();
-            dismissMiniPlayer();
-          }}
+          onPress={dismissMiniPlayer}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           <Ionicons name="close" size={20} color={colors.textMuted} />
         </TouchableOpacity>
-      </TouchableOpacity>
+      </View>
     </View>
   );
 };

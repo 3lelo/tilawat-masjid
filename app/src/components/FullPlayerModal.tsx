@@ -55,7 +55,9 @@ export const FullPlayerModal: React.FC = () => {
   // Check download state
   useEffect(() => {
     if (currentTrack) {
-      isAudioDownloaded(currentTrack.id).then(setIsDownloaded);
+      isAudioDownloaded(currentTrack.id)
+        .then(setIsDownloaded)
+        .catch(() => {});
     }
   }, [currentTrack]);
 
@@ -182,10 +184,12 @@ export const FullPlayerModal: React.FC = () => {
             style={[styles.seekTrack, { backgroundColor: colors.border }]}
             activeOpacity={1}
             onPress={(e) => {
-              const { locationX } = e.nativeEvent;
-              // seek on tap approximate width ~ 320
-              const ratio = Math.max(0, Math.min(1, locationX / 320));
-              seekTo(ratio * duration);
+              const { locationX } = e.nativeEvent || {};
+              if (typeof locationX === 'number' && !isNaN(locationX) && duration > 0) {
+                // seek on tap approximate width ~ 320
+                const ratio = Math.max(0, Math.min(1, locationX / 320));
+                seekTo(ratio * duration);
+              }
             }}
           >
             <View
